@@ -8,6 +8,9 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
+// สำหรับการจัดการ Token ในการยืนยันตัวตนของผู้ใช้
+use Laravel\Sanctum\HasApiTokens;
+
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
@@ -18,10 +21,16 @@ class User extends Authenticatable
      *
      * @var list<string>
      */
+
+    use HasApiTokens, HasFactory, Notifiable;
+
     protected $fillable = [
-        'name',
+        'display_name',
+        'username',
         'email',
         'password',
+        'role',
+        'status',
     ];
 
     /**
