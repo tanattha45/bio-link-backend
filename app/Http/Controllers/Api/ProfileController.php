@@ -7,6 +7,7 @@ use App\Models\Profile;
 use App\Http\Requests\UpdateProfileRequest;
 use App\Http\Resources\ProfileResource;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 
 class ProfileController extends Controller
 {
@@ -49,13 +50,14 @@ class ProfileController extends Controller
         return new ProfileResource($profile);
     }
 
-    public function updateForTest(Request $request, $username)
+    // ฟังก์ชันทดสอบอัปเดตข้อมูลพร้อมระบบอัปโหลดไฟล์รูปภาพของจริง
+    public function testUpdate(Request $request, $username)
     {
         try {
-            // 1. 🔓 ปลดล็อก Mass Assignment ชั่วคราว (ไม่ง้อ $fillable ใน Model แล้ว)
+            // 1. 🔓 ปลดล็อก Mass Assignment ชั่วคราว
             \App\Models\Profile::unguard();
 
-            // 2. ตรวจสอบหรือสร้าง User ID 1 มารองรับ Foreign Key
+            // 2. ตรวจสอบหรือสร้าง User ID 1 มารองรับ Foreign Key (สำหรับทดสอบ)
             $user = \App\Models\User::firstOrCreate(
                 ['id' => 1],
                 [
@@ -65,17 +67,32 @@ class ProfileController extends Controller
                 ]
             );
 
-            // 3. 🔍 ส่องโครงสร้างตาราง profiles ใน MySQL จริงๆ ณ ตอนนี้ว่ามีคอลัมน์อะไรอยู่บ้าง
-            $existingColumns = \Illuminate\Support\Facades\Schema::getColumnListing('profiles');
+            // 3. ✨ ระบบจัดการไฟล์รูปภาพ (File Upload) ✨
+            $avatarUrl = $request->input('avatar_url'); // รับค่า URL เดิมมาก่อน (ถ้ามี)
+            if ($request->hasFile('avatar')) {
+                // ถ้ามีการแนบไฟล์รูป avatar มา ให้เซฟลงโฟลเดอร์ storage/app/public/avatars
+                $path = $request->file('avatar')->store('avatars', 'public');
+                $avatarUrl = '/storage/' . $path; // สร้าง Path ใหม่สำหรับเก็บลง Database
+            }
 
-            // 4. รวบรวมข้อมูลดิบทั้งหมดที่ส่งมาจากหน้าเว็บ React
+            // (เผื่ออนาคต) ระบบจัดการอัปโหลดภาพปก
+            $coverUrl = $request->input('cover_url');
+            if ($request->hasFile('cover')) {
+                $path = $request->file('cover')->store('covers', 'public');
+                $coverUrl = '/storage/' . $path;
+            }
+
+            // 4. 🔍 ส่องโครงสร้างตาราง profiles ใน MySQL ว่ามีคอลัมน์อะไรอยู่บ้าง
+            $existingColumns = Schema::getColumnListing('profiles');
+
+            // 5. รวบรวมข้อมูลดิบทั้งหมดที่ส่งมาจากหน้าเว็บ React
             $incomingData = [
                 'user_id'           => $user->id,
                 'username'          => $username,
                 'display_name'      => $request->input('display_name'),
                 'bio'               => $request->input('bio'),
-                'avatar_url'        => $request->input('avatar_url'),
-                'cover_url'         => $request->input('cover_url'),
+                'avatar_url'        => $avatarUrl, // ใช้ URL ที่ผ่านการเช็กไฟล์อัปโหลดแล้ว
+                'cover_url'         => $coverUrl,  // ใช้ URL ที่ผ่านการเช็กไฟล์อัปโหลดแล้ว
                 'contact_name'      => $request->input('contact_name'),
                 'contact_phone'     => $request->input('contact_phone'),
                 'contact_email'     => $request->input('contact_email'),
@@ -85,7 +102,7 @@ class ProfileController extends Controller
                 'show_save_contact' => $request->input('show_save_contact', 1),
             ];
 
-            // 💡 กรองเอาเฉพาะข้อมูลที่มีคอลัมน์อยู่จริงใน MySQL เท่านั้น (อันไหนไม่มีในตารางจะถูกคัดออกอัตโนมัติ ไม่พังแน่นอน)
+            // 6. 💡 กรองเอาเฉพาะข้อมูลที่มีคอลัมน์อยู่จริงใน MySQL เท่านั้น 
             $dataToSave = [];
             foreach ($incomingData as $key => $value) {
                 if (in_array($key, $existingColumns) && $value !== null) {
@@ -93,19 +110,19 @@ class ProfileController extends Controller
                 }
             }
 
-            // 5. สั่งอัปเดตข้อมูลหรือสร้างใหม่ลงฐานข้อมูล
+            // 7. สั่งอัปเดตข้อมูลหรือสร้างใหม่ลงฐานข้อมูล
             $profile = \App\Models\Profile::updateOrCreate(
                 ['username' => $username],
                 $dataToSave
             );
 
-            // 🔒 เปิดระบบความปลอดภัย Model กลับคืนตามเดิม
+            // 8. 🔒 เปิดระบบความปลอดภัย Model กลับคืนตามเดิม
             \App\Models\Profile::reguard();
 
-            // 6. ส่ง JSON ผลลัพธ์กลับไปหาหน้าบ้าน React ทันที
+            // 9. ส่ง JSON ผลลัพธ์กลับไปหาหน้าบ้าน React
             return response()->json([
                 'success' => true,
-                'message' => 'บันทึกข้อมูลผ่านโหมด Expert สำเร็จเรียบร้อย!',
+                'message' => 'บันทึกข้อมูลและรูปภาพสำเร็จเรียบร้อย!',
                 'data' => $profile
             ], 200);
 
