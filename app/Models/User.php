@@ -7,6 +7,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 
 // เกี่ยวกับการแจ้งเตือน
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 // สำหรับการจัดการ Token ในการยืนยันตัวตนของผู้ใช้
 use Laravel\Sanctum\HasApiTokens;
@@ -56,5 +57,9 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+    public function profile(): HasOne
+    {
+        return $this->hasOne(Profile::class);
     }
 }
