@@ -202,8 +202,9 @@ class AuthController extends Controller
         $request->validate([
             'email'    => 'required|email',
             'otp'      => 'required|numeric|digits:4',
+            // confirmed จะตรวจสอบฟิลที่อยู่ใน format _confirmation ให้ทันทีดังนั้นเราไม่จำเป็นที่จะต้องเช็คซ้ำ
+            // front เราใช้ password_confirmation
             'password' => 'required|string|min:8|confirmed',
-            'password_confirmation' => 'required|string|min:8|confirmed',
         ]);
 
         // ตรวจสอบรหัส OTP ใน Cache
@@ -227,15 +228,14 @@ class AuthController extends Controller
         }
 
         // อัปเดตรหัสผ่านใหม่
-        $updatedRow = User::where('email', $request->email)->update([
-            'password' => Hash::make($request->password)
-        ]);
+        $user->password = Hash::make($request->password);
+        $user->save();
 
         // เช็คว่ามีแถวในตารางถูกอัปเดตจริงๆ ไหม
         if ($updatedRow === 0) {
             return response()->json([
                 'status'  => 'error',
-                'message' => 'ไม่พบข้อมูลผู้ใช้งาน หรือระบบไม่สามารถอัปเดตข้อมูลได้ค่ะ'
+                'message' => 'ไม่พบข้อมูลผู้ใช้งาน หรือระบบไม่สามารถอัปเดตข้อมูลได้'
             ], 404);
         }
 
@@ -245,7 +245,7 @@ class AuthController extends Controller
 
         return response()->json([
             'status'  => 'success',
-            'message' => 'เปลี่ยนรหัสผ่านใหม่สำเร็จแล้วค่ะ 🎉'
+            'message' => 'เปลี่ยนรหัสผ่านใหม่สำเร็จ'
         ], 200);
     }
 }
