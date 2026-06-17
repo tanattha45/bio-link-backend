@@ -2,26 +2,33 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
-use Database\Factories\UserFactory;
-use Illuminate\Database\Eloquent\Factories\HasFactory;
+// นำเข้า class User ของ Laravel มาในชื่อของ Authenticatable
 use Illuminate\Foundation\Auth\User as Authenticatable;
+
+// เกี่ยวกับการแจ้งเตือน
 use Illuminate\Notifications\Notifiable;
+
+// สำหรับการจัดการ Token ในการยืนยันตัวตนของผู้ใช้
+use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable
 {
-    /** @use HasFactory<UserFactory> */
-    use HasFactory, Notifiable;
+    use HasApiTokens, Notifiable;
 
     /**
      * The attributes that are mass assignable.
      *
      * @var list<string>
      */
+
+    // อนุญาติให้ controller บันทึกข้อมูลลง column พวกนี้ได้โดยตรง
     protected $fillable = [
-        'name',
+        'display_name',
+        'username',
         'email',
         'password',
+        'role',
+        'status',
     ];
 
     /**
@@ -29,6 +36,8 @@ class User extends Authenticatable
      *
      * @var list<string>
      */
+
+    // เป็นส่วนที่เมื่อ return เป็น JSON แล้วจะไม่แสดงในส่วนนี้เพื่อความปลอดภัย
     protected $hidden = [
         'password',
         'remember_token',
@@ -39,6 +48,8 @@ class User extends Authenticatable
      *
      * @return array<string, string>
      */
+
+    // cast เหมือนวุ้นแปลภาษาแปลงข้อมูลให้สะดวกต่อการใช้งาน
     protected function casts(): array
     {
         return [
