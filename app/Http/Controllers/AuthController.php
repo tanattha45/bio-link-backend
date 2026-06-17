@@ -15,6 +15,10 @@ use Illuminate\Support\Facades\Hash;
 // ตรวจสอบความถูกต้องของข้อมูล (Data Validation)
 use Illuminate\Support\Facades\Validator;
 
+use App\Mail\OtpMail;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Cache;
+
 class AuthController extends Controller
 {
 
@@ -113,5 +117,46 @@ class AuthController extends Controller
             'user' => $user,
             'token_type' => 'Bearer',
         ], 200);
+    }
+
+    // การส่ง OTP
+    public function sendOtp(Request $request)
+    {
+        // ตรวจข้อมูล email
+        $request->validate([
+            'email' => 'required|email'
+        ]);
+
+        // check is that email have in database
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'ไม่พบอีเมลนี้ในระบบ กรุณาตรวจสอบความถูกต้องอีกครั้งค่ะ'
+            ], 404);
+        }
+
+        // สุ่ม opt 4 หลัก
+        $otp = rand(1000,9999);
+
+        // บันทึกรหัสลงหน่วยความจำ Cache ตั้งเวลาหมดอายุไว้ที่ 5 นาที (300 วินาที)
+        // ตั้งชื่อคีย์ตามอีเมล เช่น 'otp_tanattha@gmail.com' เพื่อป้องกันข้อมูลสลับกันคนอื่น
+        Cache::put('otp_' . $request->email, $otp, 300);
+
+        try {
+            //สั่งส่งอีเมลจำลองออกไปหาผู้ใช้ (ปลายทางจะไปโผล่ที่ Mailtrap ของเรา)
+            Mail::to($request->email)->send(new OtpMail($otp));
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'ส่งรหัส OTP ไปยังอีเมลของท่านเรียบร้อยแล้วค่ะ'
+            ], 200);
+            
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'เกิดข้อผิดพลาดจากระบบส่งอีเมล: ' . $e->getMessage()
+            ], 500);
     }
 }
