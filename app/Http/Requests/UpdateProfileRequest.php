@@ -24,8 +24,8 @@ class UpdateProfileRequest extends FormRequest
             'show_save_contact' => 'boolean',
             'theme_config' => 'nullable|array',
             // URL validation
-            'avatar_url' => 'nullable|url|max:500',
-            'cover_url' => 'nullable|url|max:500',
+            'avatar_url'   => 'nullable|string',
+            'cover_url'    => 'nullable|string',
             'contact_phone' => 'nullable|string|max:20',
         ];
     }
