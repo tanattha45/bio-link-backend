@@ -73,9 +73,8 @@ class AuthController extends Controller
     // ฟังก์ชันสำหรับการเข้าสู่ระบบ (Login)
     public function login(Request $request)
     {
-        // 1. ตรวจสอบว่ากรอกอีเมลและรหัสผ่านมาไหม
+        // 1. ตรวจสอบว่ารหัสผ่านมาไหม
         $validator = Validator::make($request->all(), [
-            'email' => 'required|email',
             'password' => 'required'
         ]);
 
@@ -88,9 +87,13 @@ class AuthController extends Controller
             ], 422);
         }
 
-        // 2. ค้นหา User จากอีเมล
-        $user = User::where('email', $request->email)->first();
-
+        // 2. ค้นหา User โดยดูว่า React ส่ง email หรือ username มา
+        if ($request->has('email')){
+            $user = User::where('email', $request->email)->first();
+        } else {
+            $user = User::where('username' , $request->username)->first();
+        }
+        
         // 3. เช็กว่าเจอ User ไหม และรหัสผ่านตรงกันหรือเปล่า
         if (!$user || !Hash::check($request->password, $user->password)) {
             return response()->json([
