@@ -6,7 +6,7 @@ namespace App\Http\Controllers;
 // เรียกใช้ Model ของตาราง users เพื่อจัดการข้อมูลในฐานข้อมูล
 use App\Models\User;
 
-// ใช้สำหรับรับค่าต่าง ๆ ที่ส่งมาจาก HTTP Request
+// ใช้สำหรับรับค่าต่าง ๆ ที่ส่งมาจาก HTTP Request เก็บในตัวแปร $request
 use Illuminate\Http\Request;
 
 // เข้ารหัสลับ (Hashing)
@@ -22,6 +22,8 @@ class AuthController extends Controller
     public function register(Request $request)
     {
         // 1. การตรวจสอบข้อมูล (Validation)
+        // $validator คือตัวแปรที่เก็บผลลัพธ์จากการ Validation แล้ว 
+        // $request->all() $requestมันเก็บข้อมูลแล้ว all หมายถึงเราจะดึงข้อมูลทุกตัวที่มันเก็บมาเช็ค
         $validator = Validator::make($request->all(), [
             // required ห้ามเป็นค่าว่าง, string ต้องเป็นข้อความ, max:100 ความยาวไม่เกิน 100 ตัวอักษร
             'display_name' => 'required|string|max:100',
@@ -35,11 +37,17 @@ class AuthController extends Controller
             'password'     => 'required|string|min:8',
         ]);
 
-        // Validation Fails
+        // Validation Fails คืนค่าเป็น Boolean 
+        // ถ้า fail (ข้อมูลไม่ถูก) จะคืนค่า true จะเข้า if 
+        // ถ้า fail (ข้อมูลถูก) จะคืนค้า false แล้วข้ามไปทำงานอื่นต่อ
         if ($validator->fails()) {
+
+        // case ข้อมูลผิดจะ return ค่าเหล่านี้กลับไปให้ frontend 
             return response()->json([
                 'status' => 'error',
                 'message' => 'Validation Error',
+
+                // ดึงข้อมูลที่ผิดทั้งหมดแสดงผลในรูปของ json คืนให้frontend
                 'errors' => $validator->errors(),
             ], 422);
         }
