@@ -17,9 +17,9 @@ return new class extends Migration {
             $table->text('bio')->nullable();
             
             // Media URLs
-            $table->string('avatar_url', 500)->nullable();
-            $table->string('cover_url', 500)->nullable();
-            $table->string('bg_image_url', 500)->nullable();
+            $table->longText('avatar_url')->nullable();
+            $table->longText('cover_url')->nullable();
+            $table->longText('bg_image_url')->nullable();
             
             // Save Contact (vCard) Info
             $table->string('contact_name', 100)->nullable();
