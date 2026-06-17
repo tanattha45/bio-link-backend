@@ -11,7 +11,8 @@ Route::post('/login', [AuthController::class, 'login']);
 // Public Route (ไม่ต้องใช้ Token)
 Route::get('/profiles/{username}', [ProfileController::class, 'showPublic']);
 
-Route::put('/profiles/{username}/test-update', [ProfileController::class, 'updateForTest']);
+// แก้ให้เรียก 'testUpdate' (ให้ตรงกับชื่อฟังก์ชันใน ProfileController)
+Route::put('/profiles/{username}/test-update', [ProfileController::class, 'testUpdate']);
 
 // Protected Routes (ต้องส่ง Bearer Token)
 // สมมติว่าใช้ Sanctum
