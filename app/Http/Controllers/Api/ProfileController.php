@@ -112,6 +112,7 @@ class ProfileController extends Controller
                 'contact_job_title' => $request->input('contact_job_title'),
                 'contact_website'   => $request->input('contact_website'),
                 'show_save_contact' => $request->input('show_save_contact', 1),
+                'theme_config'      => $request->input('theme_config'),
             ];
 
             $dataToSave = [];
