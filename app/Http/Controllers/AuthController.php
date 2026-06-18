@@ -15,6 +15,10 @@ use Illuminate\Support\Facades\Hash;
 // ตรวจสอบความถูกต้องของข้อมูล (Data Validation)
 use Illuminate\Support\Facades\Validator;
 
+use App\Mail\OtpMail;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Cache;
+
 class AuthController extends Controller
 {
 
@@ -42,7 +46,7 @@ class AuthController extends Controller
         // ถ้า fail (ข้อมูลถูก) จะคืนค้า false แล้วข้ามไปทำงานอื่นต่อ
         if ($validator->fails()) {
 
-        // case ข้อมูลผิดจะ return ค่าเหล่านี้กลับไปให้ frontend 
+            // case ข้อมูลผิดจะ return ค่าเหล่านี้กลับไปให้ frontend 
             return response()->json([
                 'status' => 'error',
                 'message' => 'Validation Error',
@@ -112,6 +116,127 @@ class AuthController extends Controller
             'access_token' => $token,
             'user' => $user,
             'token_type' => 'Bearer',
+        ], 200);
+    }
+
+    // การส่ง OTP
+    public function sendOtp(Request $request)
+    {
+        // ตรวจข้อมูล email
+        $request->validate([
+            'email' => 'required|email'
+        ]);
+
+        // check is that email have in database
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'ไม่พบอีเมลนี้ในระบบ กรุณาตรวจสอบความถูกต้องอีกครั้งค่ะ'
+            ], 404);
+        }
+
+        // สุ่ม opt 4 หลัก
+        $otp = rand(1000,9999);
+
+        // บันทึกรหัสลงหน่วยความจำ Cache ตั้งเวลาหมดอายุไว้ที่ 5 นาที (300 วินาที)
+        // ตั้งชื่อคีย์ตามอีเมล เช่น 'otp_tanattha@gmail.com' เพื่อป้องกันข้อมูลสลับกันคนอื่น
+        Cache::put('otp_' . $request->email, $otp, 300);
+
+        try {
+            //สั่งส่งอีเมลจำลองออกไปหาผู้ใช้ (ปลายทางจะไปโผล่ที่ Mailtrap ของเรา)
+            Mail::to($request->email)->send(new OtpMail($otp));
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'ส่งรหัส OTP ไปยังอีเมลของท่านเรียบร้อยแล้วค่ะ'
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'เกิดข้อผิดพลาดจากระบบส่งอีเมล: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function verifyOtp(Request $request){
+        // ตรวจสอบข้อมูลที่ React ส่งมา
+        $request->validate([
+            'email' => 'required|email',
+            'otp'   => 'required|numeric|digits:4'
+        ]);
+
+        //ดึงรหัส OTP ของอีเมลนี้ที่ถูกบันทึกไว้ในหน่วยความจำ (Cache) ออกมา
+        $cachedOtp = Cache::get('otp_' . $request->email);
+
+        //กรณีหาไม่เจอ
+        if (!$cachedOtp) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'รหัส OTP หมดอายุ หรือยังไม่ได้ทำการขอรหัสค่ะ'
+            ], 400);
+        }
+
+        // กรณีรหัสที่พิมพ์มา ไม่ตรงกับรหัสที่ส่งไปในอีเมล
+        if ($cachedOtp != $request->otp) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'รหัส OTP ไม่ถูกต้อง กรุณาลองใหม่อีกครั้งค่ะ'
+            ], 400);
+        }
+    
+
+        // กรณีถูกต้อง
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'ยืนยันรหัส OTP สำเร็จ!'
+        ], 200);
+    }
+
+    // reset password
+    public function resetPassword(Request $request)
+    {
+        // ตรวจสอบข้อมูล
+        $request->validate([
+            'email'    => 'required|email',
+            'otp'      => 'required|numeric|digits:4',
+            // confirmed จะตรวจสอบฟิลที่อยู่ใน format _confirmation ให้ทันทีดังนั้นเราไม่จำเป็นที่จะต้องเช็คซ้ำ
+            // front เราใช้ password_confirmation
+            'password' => 'required|string|min:8|confirmed',
+        ]);
+
+        // ตรวจสอบรหัส OTP ใน Cache
+        $cachedOtp = Cache::get('otp_' . $request->email);
+
+        if (!$cachedOtp || $cachedOtp != $request->otp) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'เซสชันหมดอายุ หรือรหัส OTP ไม่ถูกต้อง กรุณาเริ่มทำรายการใหม่อีกครั้งค่ะ'
+            ], 400);
+        }
+
+        // ค้นหา User คนนี้ในฐานข้อมูล
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json([
+                'status'  => 'error',
+                'message' => 'ไม่พบข้อมูลผู้ใช้งานในระบบ'
+            ], 404);
+        }
+
+        // อัปเดตรหัสผ่านใหม่
+        $user->password = Hash::make($request->password);
+        $user->save();
+
+        // ลบตาราง OTP ออกจาก Cache เพื่อไม่ให้ใช้ซ้ำ
+        Cache::forget('otp_' . $request->email);
+
+        return response()->json([
+            'status'  => 'success',
+            'message' => 'เปลี่ยนรหัสผ่านใหม่สำเร็จ'
         ], 200);
     }
 }
