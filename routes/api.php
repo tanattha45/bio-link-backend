@@ -8,6 +8,14 @@ use App\Http\Controllers\AuthController;
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);  
 
+// OTP
+Route::post('/forgot-password', [AuthController::class, 'sendOtp']);
+// verify OTP
+Route::post('/verify-otp', [AuthController::class, 'verifyOtp']);
+// reset password
+Route::post('/reset-password', [AuthController::class, 'resetPassword']);
+
+
 // Public Route (ไม่ต้องใช้ Token)
 Route::get('/profiles/{username}', [ProfileController::class, 'showPublic']);
 
