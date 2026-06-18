@@ -48,21 +48,35 @@ class ProfileController extends Controller
     }
 
     // ฟังก์ชันนี้ถูกเรียกโดย Frontend ผ่าน Route test-update
-    public function updateForTest(Request $request, $username)
+    public function updateForTest(Request $request, $username) // $username คือชื่อเดิมจากหน้าเว็บ
     {
         try {
             \App\Models\Profile::unguard();
 
-            $user = \App\Models\User::firstOrCreate(
-                ['username' => $username],
-                [
-                    'display_name' => $request->input('display_name') ?? $username,
-                    'email'        => $username . '@example.com', // จำลองอีเมลไม่ให้ซ้ำกัน
-                    'password'     => bcrypt('password')
-                ]
-            );
+            // 1. รับชื่อ username ใหม่ที่พิมพ์เข้ามา (ถ้าไม่มีให้ใช้ชื่อเดิม)
+            $newUsername = $request->input('username', $username);
 
-            // ✨ ระบบอัปโหลดไฟล์รูปภาพของจริง ✨
+            // 2. ค้นหาบัญชีผู้ใช้จาก "ชื่อเดิม"
+            $user = \App\Models\User::where('username', $username)->first();
+            
+            if ($user) {
+                // ⭐️ ถ้าเจอคนเดิม: อัปเดตแค่ชื่อ username (ไม่สร้างเมลใหม่ ไม่แตะเมลเดิม)
+                $user->username = $newUsername;
+                if ($request->has('display_name')) {
+                    $user->display_name = $request->input('display_name');
+                }
+                $user->save();
+            } else {
+                // สร้างใหม่เฉพาะกรณีที่ไม่เคยมีบัญชีนี้ในระบบเลยจริงๆ
+                $user = \App\Models\User::create([
+                    'username' => $newUsername,
+                    'display_name' => $request->input('display_name') ?? $newUsername,
+                    'email' => $newUsername . '@example.com',
+                    'password' => bcrypt('password')
+                ]);
+            }
+
+            // --- ส่วนจัดการอัปโหลดรูปภาพ ---
             $avatarUrl = $request->input('avatar_url');
             if ($request->hasFile('avatar')) {
                 $path = $request->file('avatar')->store('avatars', 'public');
@@ -81,11 +95,11 @@ class ProfileController extends Controller
                 $bgImageUrl = '/storage/' . $path;
             }
 
-            $existingColumns = Schema::getColumnListing('profiles');
+            $existingColumns = \Illuminate\Support\Facades\Schema::getColumnListing('profiles');
 
             $incomingData = [
                 'user_id'           => $user->id,
-                'username'          => $username,
+                'username'          => $newUsername, // ⭐️ บันทึกชื่อใหม่ลงตาราง Profile
                 'display_name'      => $request->input('display_name'),
                 'bio'               => $request->input('bio'),
                 'avatar_url'        => $avatarUrl,
@@ -107,8 +121,9 @@ class ProfileController extends Controller
                 }
             }
 
+            // 3. อัปเดต Profile โดยหาจาก "ชื่อเดิม" แล้วทับด้วยข้อมูลทั้งหมดที่เป็นชื่อใหม่
             $profile = \App\Models\Profile::updateOrCreate(
-                ['username' => $username],
+                ['username' => $username], 
                 $dataToSave
             );
 
