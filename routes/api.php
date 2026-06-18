@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\Api\BlockController;
 
 // POST Request , /register URL ที่เราเปิดไว้ให้ฝั่ง Frontend เรียกใช้งาน และเมื่อมีการเรียกใช้งาน URL นี้ จะให้ไปทำงานที่ฟังก์ชัน register ใน AuthController
 Route::post('/register', [AuthController::class, 'register']);
@@ -14,6 +15,14 @@ Route::post('/forgot-password', [AuthController::class, 'sendOtp']);
 Route::post('/verify-otp', [AuthController::class, 'verifyOtp']);
 // reset password
 Route::post('/reset-password', [AuthController::class, 'resetPassword']);
+
+// block
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post('/blocks', [BlockController::class, 'store']);
+    Route::get('/blocks/{id}', [BlockController::class, 'show']);
+    Route::put('/blocks/{id}', [BlockController::class, 'update']);
+    
+});
 
 
 // Public Route (ไม่ต้องใช้ Token)
