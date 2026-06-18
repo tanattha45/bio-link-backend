@@ -39,28 +39,30 @@ class ProfileController extends Controller
         $profile = Profile::where('username', $username)->first();
 
         if (!$profile) {
-            return response()->json(['message' => 'ไม่พบข้อมูล Profile ของผู้ใช้นี้'], 404);
+            return response()->json([
+                'message' => 'ไม่พบข้อมูล Profile ของผู้ใช้นี้'
+            ], 404);
         }
 
         return new ProfileResource($profile);
     }
 
-    // ฟังก์ชันจัดการอัปเดตข้อมูลพร้อมระบบอัปโหลดไฟล์รูปภาพของจริง
-    public function testUpdate(Request $request, $username)
+    // ฟังก์ชันนี้ถูกเรียกโดย Frontend ผ่าน Route test-update
+    public function updateForTest(Request $request, $username)
     {
         try {
             \App\Models\Profile::unguard();
 
             $user = \App\Models\User::firstOrCreate(
-                ['id' => 1],
+                ['username' => $username],
                 [
-                    'name' => 'Tanattha Test',
-                    'email' => 'test@example.com',
-                    'password' => bcrypt('password')
+                    'display_name' => $request->input('display_name') ?? $username,
+                    'email'        => $username . '@example.com', // จำลองอีเมลไม่ให้ซ้ำกัน
+                    'password'     => bcrypt('password')
                 ]
             );
 
-            // ✨ ระบบจัดการไฟล์รูปภาพ (File Upload)
+            // ✨ ระบบอัปโหลดไฟล์รูปภาพของจริง ✨
             $avatarUrl = $request->input('avatar_url');
             if ($request->hasFile('avatar')) {
                 $path = $request->file('avatar')->store('avatars', 'public');
@@ -88,7 +90,7 @@ class ProfileController extends Controller
                 'bio'               => $request->input('bio'),
                 'avatar_url'        => $avatarUrl,
                 'cover_url'         => $coverUrl,
-                'bg_image_url'      => $bgImageUrl, // เพิ่มการจัดการ background
+                'bg_image_url'      => $bgImageUrl,
                 'contact_name'      => $request->input('contact_name'),
                 'contact_phone'     => $request->input('contact_phone'),
                 'contact_email'     => $request->input('contact_email'),
@@ -100,7 +102,6 @@ class ProfileController extends Controller
 
             $dataToSave = [];
             foreach ($incomingData as $key => $value) {
-                // เก็บข้อมูลถ้ามีใน DB และมีค่า (ไม่เป็น null)
                 if (in_array($key, $existingColumns) && $value !== null) {
                     $dataToSave[$key] = $value;
                 }
@@ -115,7 +116,7 @@ class ProfileController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'บันทึกข้อมูลและรูปภาพสำเร็จเรียบร้อย!',
+                'message' => 'บันทึกข้อมูลและอัปโหลดรูปภาพสำเร็จเรียบร้อย!',
                 'data' => $profile
             ], 200);
 
