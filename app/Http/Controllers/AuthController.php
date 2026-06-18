@@ -231,15 +231,6 @@ class AuthController extends Controller
         $user->password = Hash::make($request->password);
         $user->save();
 
-        // เช็คว่ามีแถวในตารางถูกอัปเดตจริงๆ ไหม
-        if ($updatedRow === 0) {
-            return response()->json([
-                'status'  => 'error',
-                'message' => 'ไม่พบข้อมูลผู้ใช้งาน หรือระบบไม่สามารถอัปเดตข้อมูลได้'
-            ], 404);
-        }
-
-
         // ลบตาราง OTP ออกจาก Cache เพื่อไม่ให้ใช้ซ้ำ
         Cache::forget('otp_' . $request->email);
 
