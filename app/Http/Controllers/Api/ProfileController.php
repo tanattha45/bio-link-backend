@@ -36,7 +36,7 @@ class ProfileController extends Controller
     // ดึงข้อมูลสำหรับหน้าสาธารณะ (ไม่ต้อง Login)
     public function showPublic($username)
     {
-        $profile = Profile::where('username', $username)->first();
+        $profile = Profile::with('blocks')->where('username', $username)->first();
 
         if (!$profile) {
             return response()->json([

@@ -29,6 +29,7 @@ class ProfileResource extends JsonResource
                 'website' => $this->contact_website,
             ],
             'theme' => $this->theme_config ?? [], // จัดการค่า null ให้เป็น Array ว่าง
+            'blocks' => $this->whenLoaded('blocks'),
         ];
     }
 }
