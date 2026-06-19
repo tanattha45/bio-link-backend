@@ -14,12 +14,13 @@ return [
     | To learn more: https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS
     |
     */
-
-    'paths' => ['api/*', 'sanctum/csrf-cookie'],
+    // เพิ่ม 'login', 'logout', 'register' เข้าไปใน paths
+    'paths' => ['api/*', 'login', 'logout', 'register', 'sanctum/csrf-cookie'],
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['*'],
+    // เปลี่ยนจาก ['*'] เป็น URL ของ Frontend หน้าบ้านตรงๆ
+    'allowed_origins' => ['http://localhost:5173'],
 
     'allowed_origins_patterns' => [],
 
@@ -29,6 +30,7 @@ return [
 
     'max_age' => 0,
 
-    'supports_credentials' => false,
+    // ต้องเปลี่ยนเป็น true เพื่อให้ระบบ Authentication (Sanctum/Session) ทำงานข้ามโดเมนได้
+    'supports_credentials' => true,
 
 ];
