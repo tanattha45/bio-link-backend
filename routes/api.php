@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\AnalyticsController;
 // Auth
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);  
+Route::post('/auth/google', [AuthController::class, 'googleLogin']);
 
 // OTP
 Route::post('/forgot-password', [AuthController::class, 'sendOtp']);
