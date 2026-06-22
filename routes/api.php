@@ -1,6 +1,8 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\File;      // ⭐️ นำเข้า File (สำหรับอ่านรูปภาพ)
+use Illuminate\Support\Facades\Response;  // ⭐️ นำเข้า Response (สำหรับส่ง header CORS)
 use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\Api\BlockController;
@@ -8,6 +10,23 @@ use App\Http\Controllers\Api\AnalyticsController;
 
 
 // Public Routes (ไม่ต้องใช้ Token)
+
+// ⭐️ เพิ่ม API เส้นพิเศษสำหรับปลดล็อก CORS ให้รูปโปรไฟล์ ⭐️
+Route::get('/get-avatar/{filename}', function ($filename) {
+    // กำหนดพาทที่เก็บรูปภาพ (อ้างอิงตาม storage ของ Laravel)
+    $path = storage_path('app/public/avatars/' . $filename);
+
+    if (!File::exists($path)) {
+        abort(404);
+    }
+
+    $file = File::get($path);
+    $type = File::mimeType($path);
+
+    return Response::make($file, 200)
+        ->header('Content-Type', $type)
+        ->header('Access-Control-Allow-Origin', '*'); // 👈 กุญแจสำคัญอนุญาตให้ React ดึงรูปได้
+});
 
 // Auth
 Route::post('/register', [AuthController::class, 'register']);

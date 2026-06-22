@@ -15,7 +15,7 @@ return [
     |
     */
     // เพิ่ม 'login', 'logout', 'register' เข้าไปใน paths
-    'paths' => ['api/*', 'login', 'logout', 'register', 'sanctum/csrf-cookie'],
+    'paths' => ['api/*', 'login', 'logout', 'register', 'sanctum/csrf-cookie', 'storage/*'],
 
     'allowed_methods' => ['*'],
 
