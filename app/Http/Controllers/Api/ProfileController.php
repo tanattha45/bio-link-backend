@@ -8,6 +8,7 @@ use App\Http\Requests\UpdateProfileRequest;
 use App\Http\Resources\ProfileResource;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage; 
 
 class ProfileController extends Controller
 {
@@ -47,27 +48,82 @@ class ProfileController extends Controller
         return new ProfileResource($profile);
     }
 
+    // ฟังก์ชันลบไฟล์รูปเก่าโดยเฉพาะ (Garbage Collection)
+    private function deleteOldImage($oldUrl)
+    {
+        if ($oldUrl && str_contains($oldUrl, '/storage/')) {
+            $parts = explode('/storage/', $oldUrl);
+            $oldPath = end($parts);
+            Storage::disk('public')->delete($oldPath);
+        }
+    }
+
+    // ฟังก์ชันตัวช่วย: จัดการรูปภาพ (ย่อขนาด, แปลง WebP)
+    private function processAndSaveImage($file, $folder, $oldUrl, $maxWidth)
+    {
+        $this->deleteOldImage($oldUrl);
+
+        $manager = new \Intervention\Image\ImageManager(new \Intervention\Image\Drivers\Gd\Driver());
+        $image = $manager->read($file);
+        
+        $image->scaleDown(width: $maxWidth);
+        $encoded = $image->toWebp(80);
+
+        $filename = $folder . '/' . uniqid() . '.webp';
+        Storage::disk('public')->put($filename, (string) $encoded);
+
+        return '/storage/' . $filename;
+    }
+
+    // ⭐️ ฟังก์ชันตัวกรองลบรูปภาพแบบครอบจักรวาล (ดักจับ React ข้ามการส่งข้อมูล) ⭐️
+    private function resolveImageUrl($request, $existingUrl, $fileKey, $urlKey, $folder, $maxWidth)
+    {
+        // 1. ถ้ามีไฟล์อัปโหลดเข้ามาจริง ให้เซฟเป็นรูปใหม่ทับไปเลย
+        if ($request->hasFile($fileKey)) {
+            return $this->processAndSaveImage($request->file($fileKey), $folder, $existingUrl, $maxWidth);
+        }
+
+        // 2. ⭐️ หัวใจสำคัญที่แก้ปัญหาลบไม่ได้: ถ้าไม่มีคีย์นี้ส่งมาจาก React เลย
+        // แปลว่า React แอบตัดค่าว่างทิ้งไป ฟันธงได้เลยว่าผู้ใช้กด "ลบทิ้ง" แน่นอน
+        if (!$request->has($urlKey) && !$request->has($fileKey)) {
+            $this->deleteOldImage($existingUrl);
+            return null;
+        }
+
+        // 3. กรณีที่ส่งคีย์มา ให้เช็คค่าข้างในอีกรอบ
+        $inputUrl = $request->input($urlKey);
+        
+        // ถ้าส่งเป็นข้อความว่างๆ, null หรือ undefined มา ก็ให้ลบทิ้งเช่นกัน
+        if (empty($inputUrl) || $inputUrl === 'null' || $inputUrl === 'undefined') {
+            $this->deleteOldImage($existingUrl);
+            return null;
+        }
+
+        // ถ้าเจอลิงก์ blob: ของ React ค้างอยู่ ให้เพิกเฉยแล้วใช้รูปเดิมเพื่อกันบั๊กรูปแตก
+        if (str_starts_with($inputUrl, 'blob:')) {
+            return $existingUrl;
+        }
+
+        // ผ่านทุกด่านมาได้ แสดงว่าเป็น URL รูปเดิมที่ไม่ได้ถูกแก้
+        return $inputUrl;
+    }
+
     // ฟังก์ชันนี้ถูกเรียกโดย Frontend ผ่าน Route test-update
-    public function updateForTest(Request $request, $username) // $username คือชื่อเดิมจากหน้าเว็บ
+    public function updateForTest(Request $request, $username) 
     {
         try {
             \App\Models\Profile::unguard();
 
-            // 1. รับชื่อ username ใหม่ที่พิมพ์เข้ามา (ถ้าไม่มีให้ใช้ชื่อเดิม)
             $newUsername = $request->input('username', $username);
-
-            // 2. ค้นหาบัญชีผู้ใช้จาก "ชื่อเดิม"
             $user = \App\Models\User::where('username', $username)->first();
             
             if ($user) {
-                // ⭐️ ถ้าเจอคนเดิม: อัปเดตแค่ชื่อ username (ไม่สร้างเมลใหม่ ไม่แตะเมลเดิม)
                 $user->username = $newUsername;
                 if ($request->has('display_name')) {
                     $user->display_name = $request->input('display_name');
                 }
                 $user->save();
             } else {
-                // สร้างใหม่เฉพาะกรณีที่ไม่เคยมีบัญชีนี้ในระบบเลยจริงๆ
                 $user = \App\Models\User::create([
                     'username' => $newUsername,
                     'display_name' => $request->input('display_name') ?? $newUsername,
@@ -76,33 +132,21 @@ class ProfileController extends Controller
                 ]);
             }
 
-            // --- ส่วนจัดการอัปโหลดรูปภาพ ---
-            $avatarUrl = $request->input('avatar_url');
-            if ($request->hasFile('avatar')) {
-                $path = $request->file('avatar')->store('avatars', 'public');
-                $avatarUrl = '/storage/' . $path;
-            }
+            $existingProfile = \App\Models\Profile::where('username', $username)->first();
 
-            $coverUrl = $request->input('cover_url');
-            if ($request->hasFile('cover')) {
-                $path = $request->file('cover')->store('covers', 'public');
-                $coverUrl = '/storage/' . $path;
-            }
-
-            $bgImageUrl = $request->input('bg_image_url');
-            if ($request->hasFile('bg_image')) {
-                $path = $request->file('bg_image')->store('backgrounds', 'public');
-                $bgImageUrl = '/storage/' . $path;
-            }
+            // --- ส่วนจัดการรูปภาพ (ใช้ฟังก์ชัน resolveImageUrl ที่ฉลาดขึ้นแล้ว) ---
+            $avatarUrl = $this->resolveImageUrl($request, optional($existingProfile)->avatar_url, 'avatar', 'avatar_url', 'avatars', 400);
+            $coverUrl = $this->resolveImageUrl($request, optional($existingProfile)->cover_url, 'cover', 'cover_url', 'covers', 1200);
+            $bgImageUrl = $this->resolveImageUrl($request, optional($existingProfile)->bg_image_url, 'bg_image', 'bg_image_url', 'backgrounds', 1920);
 
             $existingColumns = \Illuminate\Support\Facades\Schema::getColumnListing('profiles');
 
             $incomingData = [
                 'user_id'           => $user->id,
-                'username'          => $newUsername, // ⭐️ บันทึกชื่อใหม่ลงตาราง Profile
+                'username'          => $newUsername, 
                 'display_name'      => $request->input('display_name'),
                 'bio'               => $request->input('bio'),
-                'avatar_url'        => $avatarUrl,
+                'avatar_url'        => $avatarUrl, 
                 'cover_url'         => $coverUrl,
                 'bg_image_url'      => $bgImageUrl,
                 'contact_name'      => $request->input('contact_name'),
@@ -117,12 +161,15 @@ class ProfileController extends Controller
 
             $dataToSave = [];
             foreach ($incomingData as $key => $value) {
-                if (in_array($key, $existingColumns) && $value !== null) {
-                    $dataToSave[$key] = $value;
+                if (in_array($key, $existingColumns)) {
+                    if (in_array($key, ['avatar_url', 'cover_url', 'bg_image_url'])) {
+                        $dataToSave[$key] = $value;
+                    } elseif ($value !== null) {
+                        $dataToSave[$key] = $value;
+                    }
                 }
             }
 
-            // 3. อัปเดต Profile โดยหาจาก "ชื่อเดิม" แล้วทับด้วยข้อมูลทั้งหมดที่เป็นชื่อใหม่
             $profile = \App\Models\Profile::updateOrCreate(
                 ['username' => $username], 
                 $dataToSave

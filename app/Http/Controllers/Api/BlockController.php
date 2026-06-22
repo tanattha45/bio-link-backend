@@ -80,7 +80,8 @@ class BlockController extends Controller
             'content_data' => 'nullable|array'
         ]);
 
-        $cleanContentData = $this->processImages($validated['content_data'] ?? []);
+        // ⭐️ แก้ไข: ส่งข้อมูลรูปเก่า ($block->content_data) เข้าไปเช็คด้วย เพื่อเคลียร์ไฟล์ขยะ
+        $cleanContentData = $this->processImages($validated['content_data'] ?? [], $block->content_data ?? []);
 
         // อัปเดตข้อมูลทับของเดิม 
         $block->update([
@@ -102,6 +103,17 @@ class BlockController extends Controller
 
         // ค้นหาบล็อกที่ต้องการลบ และต้องเป็นของ Profile คนที่ล็อกอินอยู่เท่านั้น
         $block = Block::where('profile_id', $user->profile->id)->findOrFail($id);
+
+        // ⭐️ แก้ไข: สั่งลบรูปภาพที่ค้างอยู่ในบล็อกนี้ออกจากเซิร์ฟเวอร์ก่อน
+        $contentData = $block->content_data ?? [];
+        if (is_array($contentData)) {
+            foreach ($contentData as $item) {
+                if (!empty($item['image']) && str_contains($item['image'], '/storage/')) {
+                    $path = str_replace('/storage/', '', $item['image']);
+                    Storage::disk('public')->delete($path);
+                }
+            }
+        }
 
         // สั่งลบออกจาก Database
         $block->delete();
@@ -136,30 +148,67 @@ class BlockController extends Controller
         ]);
     }
 
-    private function processImages($contentData)
+    // ⭐️ แก้ไข: อัปเกรดฟังก์ชันจัดการรูปภาพ (บีบอัด, แปลง WebP, ลบรูปเก่า)
+    private function processImages($newContentData, $oldContentData = [])
     {
-        if (!is_array($contentData)) return [];
+        if (!is_array($newContentData)) return [];
 
-        foreach ($contentData as $key => $item) {
-            // เช็คว่ามีคีย์ image และเป็นข้อความ Base64 หรือไม่
-            if (isset($item['image']) && preg_match('/^data:image\/(\w+);base64,/', $item['image'], $type)) {
+        // 1. หารูปภาพเก่าทั้งหมดที่เคยมีในบล็อกนี้
+        $oldImageUrls = [];
+        if (is_array($oldContentData)) {
+            foreach ($oldContentData as $item) {
+                if (!empty($item['image']) && str_contains($item['image'], '/storage/')) {
+                    $oldImageUrls[] = $item['image'];
+                }
+            }
+        }
+
+        $cleanContentData = [];
+        $newImageUrls = [];
+
+        foreach ($newContentData as $key => $item) {
+            // เช็คว่ามีคีย์ image และเป็นข้อความ Base64 หรือไม่ (รูปที่เพิ่งอัปโหลดใหม่)
+            if (isset($item['image']) && preg_match('/^data:image\/(\w+);base64,/', $item['image'])) {
                 
-                // ดึงข้อมูล Base64 เพียวๆ ออกมา (ตัดส่วนหัว data:image/png;base64, ออก)
+                // ดึงข้อมูล Base64 เพียวๆ ออกมา
                 $base64Data = substr($item['image'], strpos($item['image'], ',') + 1);
                 $decodedData = base64_decode($base64Data);
                 
+                // ใช้ Intervention Image ย่อขนาดและแปลงเป็น WebP
+                $manager = new \Intervention\Image\ImageManager(new \Intervention\Image\Drivers\Gd\Driver());
+                $image = $manager->read($decodedData);
+                
+                // ย่อความกว้างให้เหลือไม่เกิน 800px (ป้องกันไฟล์ใหญ่เกินจำเป็น)
+                $image->scaleDown(width: 800);
+                
+                // แปลงเป็น WebP พร้อมบีบอัดคุณภาพ 80%
+                $encoded = $image->toWebp(80);
+
                 // สร้างชื่อไฟล์ใหม่ไม่ให้ซ้ำกัน 
-                $extension = strtolower($type[1]); // ดึงนามสกุลไฟล์ เช่น png, jpg
-                $fileName = 'blocks/' . Str::uuid() . '.' . $extension;
+                $fileName = 'blocks/' . Str::uuid() . '.webp';
 
                 // บันทึกไฟล์ลงโฟลเดอร์ของ Laravel (storage/app/public/blocks)
-                Storage::disk('public')->put($fileName, $decodedData);
+                Storage::disk('public')->put($fileName, (string) $encoded);
 
                 // เปลี่ยนค่าใน array จาก Base64 ยาวๆ ให้เป็น URL สั้นๆ
-                $contentData[$key]['image'] = '/storage/' . $fileName;
+                $item['image'] = url('/storage/' . $fileName);
+                $newImageUrls[] = $item['image'];
+            } 
+            // ถ้ารูปที่ส่งมาเป็น URL เดิมอยู่แล้ว (ไม่ได้แก้ไขรูป)
+            elseif (!empty($item['image']) && str_contains($item['image'], '/storage/')) {
+                $newImageUrls[] = $item['image'];
             }
+
+            $cleanContentData[$key] = $item;
+        }
+
+        // 2. หาส่วนต่างของรูป (ถ้ารูปเก่าไม่มีในรายการใหม่ แปลว่าผู้ใช้กดลบทิ้ง)
+        $urlsToDelete = array_diff($oldImageUrls, $newImageUrls);
+        foreach ($urlsToDelete as $url) {
+            $path = str_replace('/storage/', '', $url);
+            Storage::disk('public')->delete($path);
         }
         
-        return $contentData;
+        return $cleanContentData;
     }
 }
