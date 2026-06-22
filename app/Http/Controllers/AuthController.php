@@ -274,7 +274,7 @@ class AuthController extends Controller
                     'display_name' => $googleUser->getName(),
                     'email' => $googleUser->getEmail(),
                     'username' => $Username,
-                    'google_id' => $googleUser->getId(),
+                    'google_id' => $googleUser->getID(),
                     // สุ่ม password เพราะผู้ใช้จะไม่ได้ใช้รหัสนี้ในการ login 
                     'password' => bcrypt(\Illuminate\Support\Str::random(24))
                 ]);
@@ -301,6 +301,26 @@ class AuthController extends Controller
                 'message' => 'เข้าสู่ระบบด้วย Google ไม่สำเร็จ', 
                 'error' => $e->getMessage()
             ], 400);
+        }
+    }
+
+    public function logout(Request $request)
+    {
+        try {
+            // สั่งทำลาย Token ตัวปัจจุบันที่ผู้ใช้คนนี้ถืออยู่ทิ้งไป
+            $request->user()->currentAccessToken()->delete();
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'ออกจากระบบสำเร็จ'
+            ], 200);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'เกิดข้อผิดพลาดในการออกจากระบบ',
+                'error' => $e->getMessage()
+            ], 500);
         }
     }
 }
