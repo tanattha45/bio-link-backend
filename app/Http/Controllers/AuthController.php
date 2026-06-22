@@ -19,6 +19,8 @@ use App\Mail\OtpMail;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Cache;
 
+use Laravel\Socialite\Facades\Socialite;
+
 class AuthController extends Controller
 {
 
@@ -238,5 +240,67 @@ class AuthController extends Controller
             'status'  => 'success',
             'message' => 'เปลี่ยนรหัสผ่านใหม่สำเร็จ'
         ], 200);
+    }
+
+    // Login with google
+    public function googleLogin(Request $request)
+    {
+        // การใช้ฟักืชั่น try คือการป้องกันการเกิด error ถ้าหากมี error มันจะข้ามไปทำในส่วนของ catch ทันที
+        try {
+            // ตรวจสอบ token กับ google
+            // userFromToken เอา Token ที่ได้จาก React ยิงส่งไปถาม Server ของ Google
+            $googleUser = Socialite::driver('google')->stateless()->userFromToken($request->token);
+
+            // ตรวจสอบกับฐานข้อมูล
+            // $googleUser->getEmail() การดึง email of user from google
+            $user = User::where('email', $googleUser->getEmail())->first();
+
+
+            // เป็นผู้ใช้ใหม่ 
+            if (!$user) {
+                // ดึงชื่อหน้า @ จากอีเมลมาทำเป็น Username 
+                $emailParts = explode('@', $googleUser->getEmail());
+                $baseUsername = $emailParts[0];
+                $Username = $baseUsername;
+                $counter = 1;
+
+                // เช็คชื่อซ้ำก่อน ถ้าซ้ำค่อยเติมเลข 1, 2, 3
+                while (User::where('username', $Username)->exists()) {
+                    $Username = $baseUsername . $counter;
+                    $counter++;
+                }
+
+                $user = User::create([
+                    'display_name' => $googleUser->getName(),
+                    'email' => $googleUser->getEmail(),
+                    'username' => $Username,
+                    'google_id' => $googleUser->getId(),
+                    // สุ่ม password เพราะผู้ใช้จะไม่ได้ใช้รหัสนี้ในการ login 
+                    'password' => bcrypt(\Illuminate\Support\Str::random(24))
+                ]);
+            }
+
+            // เป็นผู้ใช้เก่า
+            else{
+                // อัปเดตฟิลด์ google_id ของผู้ใช้คนนั้นให้เป็นไอดีล่าสุดที่ได้มาจาก Google
+                $user->update(['google_id' => $googleUser->getID()]);
+            }
+
+            // ออก Token ของระบบเราเองให้ React เอาไปใช้งาน
+            $token = $user->createToken('auth_token')->plainTextToken;
+
+            return response()->json([
+                'status' => 'success',
+                'user' => $user,
+                'token' => $token
+            ], 200);
+        } 
+        
+        catch (\Exception $e) {
+            return response()->json([
+                'message' => 'เข้าสู่ระบบด้วย Google ไม่สำเร็จ', 
+                'error' => $e->getMessage()
+            ], 400);
+        }
     }
 }
