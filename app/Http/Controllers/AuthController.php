@@ -21,6 +21,9 @@ use Illuminate\Support\Facades\Cache;
 
 use Laravel\Socialite\Facades\Socialite;
 
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
+
 class AuthController extends Controller
 {
 
@@ -79,12 +82,30 @@ class AuthController extends Controller
     // ฟังก์ชันสำหรับการเข้าสู่ระบบ (Login)
     public function login(Request $request)
     {
-        // 1. ตรวจสอบว่ารหัสผ่านมาไหม
+        // 1. สร้างกุญแจจำแนกตัวบุคคล (ใช้อีเมล/username + ไอพีแอดเดรสรวมกัน)
+        // ดึงข้อมูลเช็คเงื่อนไขว่าถ้าามีส่ง email มาให้ใช้ email แต่ถ้าไม่มีให้ไปเอา username มาใช้แทน
+        $identifier = $request->input('email') ?? $request->input('username'); 
+        // นำชื่อบัญชีมาต่อกับ IP Address เพื่อดูว่ามีการพยายามเข้าสู่ระบบรัวๆมั้ย
+        // $throttleKey เรานิยามให้มันเป็นป้ายชื่อ
+        $throttleKey = Str::lower($identifier) . '|' . $request->ip();
+
+        // 2. เช็คว่าคนนี้โดนบล็อกอยู่หรือเปล่า? (จำกัด 5 ครั้ง)
+        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+            // คำนวณเวลาที่เหลือ (วินาที)
+            $seconds = RateLimiter::availableIn($throttleKey);
+            $minutes = ceil($seconds / 60);
+
+            return response()->json([
+                'status' => 'error',
+                'message' => "คุณใส่รหัสผิดหลายครั้งเกินไป กรุณารอ {$minutes} นาที แล้วลองใหม่ค่ะ"
+            ], 429); // 429 คือ Too Many Requests
+        }
+
+        // 3. ตรวจสอบว่ารหัสผ่านมาไหม 
         $validator = Validator::make($request->all(), [
             'password' => 'required'
         ]);
 
-        // Validation Fails
         if ($validator->fails()) {
             return response()->json([
                 'status' => 'error',
@@ -93,25 +114,30 @@ class AuthController extends Controller
             ], 422);
         }
 
-        // 2. ค้นหา User โดยดูว่า React ส่ง email หรือ username มา
+        // 4. ค้นหา User
         if ($request->has('email')){
             $user = User::where('email', $request->email)->first();
         } else {
             $user = User::where('username' , $request->username)->first();
         }
         
-        // 3. เช็กว่าเจอ User ไหม และรหัสผ่านตรงกันหรือเปล่า
+        // ตรวจสอบรหัสผ่าน และ บันทึกความผิดพลาด
         if (!$user || !Hash::check($request->password, $user->password)) {
+            
+            // ถ้าเรารหัสผิดเกน 5 ครั้งตามที่เราตั้งในข้อที่ 2 จะโดนบล็อค
+            RateLimiter::hit($throttleKey, 300);
+
             return response()->json([
                 'status' => 'error',
                 'message' => 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'
-            ], 401); // 401 คือ Unauthorized (ไม่มีสิทธิ์)
+            ], 401);
         }
 
-        // 3. การสร้าง Token สำหรับการยืนยันตัวตน (Create Token)
+        // login สำเร็จ ล้างประวัติ และออก Token
+        RateLimiter::clear($throttleKey);
+
         $token = $user->createToken('auth_token')->plainTextToken;
 
-        // 4. การตอบกลับ (Response)
         return response()->json([
             'status' => 'success',
             'message' => 'User logged in successfully',
