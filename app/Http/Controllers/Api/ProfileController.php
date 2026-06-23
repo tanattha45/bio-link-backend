@@ -75,7 +75,7 @@ class ProfileController extends Controller
         return '/storage/' . $filename;
     }
 
-    // ⭐️ ฟังก์ชันตัวกรองลบรูปภาพแบบครอบจักรวาล (ดักจับ React ข้ามการส่งข้อมูล) ⭐️
+    // ⭐️ แก้ไขฟังก์ชันนี้: ดักจับการอัปเดตเพื่อไม่ให้รูปหายเวลากดเซฟอย่างอื่น ⭐️
     private function resolveImageUrl($request, $existingUrl, $fileKey, $urlKey, $folder, $maxWidth)
     {
         // 1. ถ้ามีไฟล์อัปโหลดเข้ามาจริง ให้เซฟเป็นรูปใหม่ทับไปเลย
@@ -83,18 +83,17 @@ class ProfileController extends Controller
             return $this->processAndSaveImage($request->file($fileKey), $folder, $existingUrl, $maxWidth);
         }
 
-        // 2. ⭐️ หัวใจสำคัญที่แก้ปัญหาลบไม่ได้: ถ้าไม่มีคีย์นี้ส่งมาจาก React เลย
-        // แปลว่า React แอบตัดค่าว่างทิ้งไป ฟันธงได้เลยว่าผู้ใช้กด "ลบทิ้ง" แน่นอน
+        // 2. ⭐️ แก้ไขใหม่: ถ้า React ไม่ได้ส่งคีย์มาเลย (เช่น กดเซฟเฉยๆ ไม่ได้ยุ่งกับรูป)
+        // ต้อง "คืนค่ารูปเดิม" ห้ามลบทิ้งเด็ดขาด!
         if (!$request->has($urlKey) && !$request->has($fileKey)) {
-            $this->deleteOldImage($existingUrl);
-            return null;
+            return $existingUrl; 
         }
 
-        // 3. กรณีที่ส่งคีย์มา ให้เช็คค่าข้างในอีกรอบ
+        // 3. กรณีที่ส่งคีย์มา ให้เช็คค่าข้างในเพื่อดูว่าผู้ใช้สั่งลบจริงไหม
         $inputUrl = $request->input($urlKey);
         
-        // ถ้าส่งเป็นข้อความว่างๆ, null หรือ undefined มา ก็ให้ลบทิ้งเช่นกัน
-        if (empty($inputUrl) || $inputUrl === 'null' || $inputUrl === 'undefined') {
+        // ถ้าจงใจส่งเป็นข้อความว่างๆ, null หรือ undefined มา ถึงจะแปลว่าสั่งลบทิ้งของจริง
+        if ($inputUrl === '' || $inputUrl === null || $inputUrl === 'null' || $inputUrl === 'undefined') {
             $this->deleteOldImage($existingUrl);
             return null;
         }
@@ -134,7 +133,7 @@ class ProfileController extends Controller
 
             $existingProfile = \App\Models\Profile::where('username', $username)->first();
 
-            // --- ส่วนจัดการรูปภาพ (ใช้ฟังก์ชัน resolveImageUrl ที่ฉลาดขึ้นแล้ว) ---
+            // --- ส่วนจัดการรูปภาพ (ใช้ฟังก์ชัน resolveImageUrl ที่แก้ไขแล้ว) ---
             $avatarUrl = $this->resolveImageUrl($request, optional($existingProfile)->avatar_url, 'avatar', 'avatar_url', 'avatars', 400);
             $coverUrl = $this->resolveImageUrl($request, optional($existingProfile)->cover_url, 'cover', 'cover_url', 'covers', 1200);
             $bgImageUrl = $this->resolveImageUrl($request, optional($existingProfile)->bg_image_url, 'bg_image', 'bg_image_url', 'backgrounds', 1920);

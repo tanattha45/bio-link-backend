@@ -69,31 +69,48 @@ class BlockController extends Controller
     // ฟังก์ชันรับข้อมูลจาก React มาอัปเดตลง Database (PUT - ตอนกดปุ่ม Save)
     public function update(Request $request, $id)
     {
-        $user = auth()->user();
+        try {
+            $user = auth()->user();
 
-        // ค้นหาบล็อกที่จะแก้ และต้องเป็นของ Profile ตัวเองเท่านั้น 
-        $block = Block::where('profile_id', $user->profile->id)->findOrFail($id);
+            // 1. ⭐️ แก้ไข: หาข้อมูล Block โดยใช้ profile_id แทน user_id ⭐️
+            $block = Block::where('profile_id', $user->profile->id)->findOrFail($id);
 
-        // ตรวจสอบข้อมูลก่อนเอาไปอัปเดต
-        $validated = $request->validate([
-            'title' => 'nullable|string|max:255',
-            'content_data' => 'nullable|array'
-        ]);
+            // 2. อัปเดตเฉพาะฟิลด์ที่ React ส่งมาเท่านั้น
+            if ($request->has('is_visible')) {
+                $block->is_visible = $request->input('is_visible');
+            }
 
-        // ⭐️ แก้ไข: ส่งข้อมูลรูปเก่า ($block->content_data) เข้าไปเช็คด้วย เพื่อเคลียร์ไฟล์ขยะ
-        $cleanContentData = $this->processImages($validated['content_data'] ?? [], $block->content_data ?? []);
+            if ($request->has('title')) {
+                $block->title = $request->input('title');
+            }
 
-        // อัปเดตข้อมูลทับของเดิม 
-        $block->update([
-            'title' => $validated['title'],
-            'content_data' => $cleanContentData
-        ]);
+            if ($request->has('type')) {
+                $block->type = $request->input('type');
+            }
 
-        return response()->json([
-            'status' => 'success',
-            'message' => 'บันทึกข้อมูลสำเร็จ!',
-            'data' => $block
-        ]);
+            if ($request->has('content_data')) {
+                // ⭐️ เพิ่มเติม: กรณีมีการส่งข้อมูลข้างในบล็อกมาใหม่ ให้ผ่านตัวจัดการรูปภาพด้วย
+                $oldContentData = $block->content_data ?? [];
+                $cleanContentData = $this->processImages($request->input('content_data'), $oldContentData);
+                $block->content_data = $cleanContentData;
+            }
+
+            $block->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'อัปเดตข้อมูลบล็อกสำเร็จ',
+                'data' => $block
+            ], 200);
+
+        } catch (\Exception $e) {
+            // ดักจับ Error ไว้ส่งกลับไปบอกหน้าบ้าน จะได้รู้ว่าพังเพราะอะไร
+            return response()->json([
+                'success' => false,
+                'message' => 'เกิดข้อผิดพลาดในการอัปเดต',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 
     // ฟังก์ชันลบข้อมูล (DELETE)
@@ -104,7 +121,7 @@ class BlockController extends Controller
         // ค้นหาบล็อกที่ต้องการลบ และต้องเป็นของ Profile คนที่ล็อกอินอยู่เท่านั้น
         $block = Block::where('profile_id', $user->profile->id)->findOrFail($id);
 
-        // ⭐️ แก้ไข: สั่งลบรูปภาพที่ค้างอยู่ในบล็อกนี้ออกจากเซิร์ฟเวอร์ก่อน
+        // สั่งลบรูปภาพที่ค้างอยู่ในบล็อกนี้ออกจากเซิร์ฟเวอร์ก่อน
         $contentData = $block->content_data ?? [];
         if (is_array($contentData)) {
             foreach ($contentData as $item) {
@@ -148,7 +165,7 @@ class BlockController extends Controller
         ]);
     }
 
-    // ⭐️ แก้ไข: อัปเกรดฟังก์ชันจัดการรูปภาพ (บีบอัด, แปลง WebP, ลบรูปเก่า)
+    // อัปเกรดฟังก์ชันจัดการรูปภาพ (บีบอัด, แปลง WebP, ลบรูปเก่า)
     private function processImages($newContentData, $oldContentData = [])
     {
         if (!is_array($newContentData)) return [];
