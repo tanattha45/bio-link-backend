@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Analytic;
 use App\Models\Profile;
+use App\Models\Block; // ⭐️ เพิ่ม Import Model Block เข้ามา
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -127,14 +128,55 @@ class AnalyticsController extends Controller
             ];
         }
 
+        // =========================================================
+        // ⭐️ 3. เพิ่มระบบดึงประสิทธิภาพลิงก์ (โชว์ทุกลิงก์ แม้คลิกจะเป็น 0)
+        // =========================================================
+        
+        // 3.1 ดึงบล็อกทั้งหมดของโปรไฟล์นี้มา
+        $blocks = Block::where('profile_id', $profile->id)->get();
+        
+        // 3.2 นับยอดคลิกแยกรหัสบล็อก (ดึงจาก Analytic แบบ Group By จะไวกว่ามาก)
+        $blockClicks = Analytic::where('profile_id', $profile->id)
+            ->whereNotNull('block_id')
+            ->where('block_id', '!=', 999999)
+            ->select('block_id', DB::raw('count(*) as total'))
+            ->groupBy('block_id')
+            ->pluck('total', 'block_id');
+
+        // 3.3 เอาข้อมูลบล็อกมารวมกับยอดคลิก
+        $linksPerformance = $blocks->map(function ($block) use ($blockClicks) {
+            // ถอดรหัส JSON ของ content_data ถ้าจำเป็น
+            $contentData = is_string($block->content_data) ? json_decode($block->content_data, true) : $block->content_data;
+            
+            // พยายามหา URL มาโชว์ (ดึงจาก item แรก)
+            $url = '';
+            if (is_array($contentData) && count($contentData) > 0) {
+                $url = $contentData[0]['url'] ?? $contentData[0]['link'] ?? '';
+            }
+
+            return [
+                'id' => $block->id,
+                'title' => $block->title ?: 'ไม่มีชื่อลิงก์',
+                'url' => $url,
+                // ถ้ายอดคลิกไม่มีใน Analytics ให้ใส่ 0 เข้าไปเลย
+                'clicks' => $blockClicks[$block->id] ?? 0 
+            ];
+        })
+        ->sortByDesc('clicks') // เรียงจากคลิกมากสุดไปน้อยสุด
+        ->values() // รีเซ็ต index ของอาร์เรย์ใหม่
+        ->toArray();
+
+        // =========================================================
+
         return response()->json([
             'success' => true,
             'data' => [
                 'total_views'  => $totalViews,
                 'total_clicks' => $totalClicks,
-                'total_saves'  => $totalSaves, // ส่งยอด Save ไปโชว์ด้วย
+                'total_saves'  => $totalSaves,
                 'ctr'          => $ctr,
                 'chart_data'   => $chartData,
+                'links'        => $linksPerformance, // ⭐️ ส่งข้อมูลลิงก์ไปให้ React
             ]
         ]);
     }
