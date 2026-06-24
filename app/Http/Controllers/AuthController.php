@@ -24,6 +24,9 @@ use Laravel\Socialite\Facades\Socialite;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
 
+use Illuminate\Support\Facades\URL;
+use App\Mail\VerifyEmailMail;
+
 class AuthController extends Controller
 {
 
@@ -70,6 +73,24 @@ class AuthController extends Controller
             'email'        => $request->email,
             'password'     => Hash::make($request->password), // เข้ารหัสรหัสผ่าน
         ]);
+
+        // 3. สร้าง Temporary Signed URL (ลิงก์ยืนยันตัวตนแบบจำกัดเวลา 60 นาที)
+        $temporaryVerificationUrl = URL::temporarySignedRoute(
+            'verification.verify', 
+            now()->addMinutes(60), 
+            [
+                'id' => $user->id, 
+                'hash' => sha1($user->email)
+            ]
+        );
+
+        // 4. ส่งอีเมลพร้อมลิงก์ 
+        try {
+            Mail::to($user->email)->queue(new VerifyEmailMail($temporaryVerificationUrl));
+        } catch (\Exception $e) {
+            // กรณีส่งอีเมลไม่สำเร็จ สามารถเลือกลบ User ทิ้ง หรือคืนค่า error กลับไปได้
+            // ในที่นี้จะปล่อยให้สมัครผ่านไปก่อน แต่ค่อยให้กด Resend Email ทีหลังได้
+        }
 
         // 3. การตอบกลับ (Response)
         return response()->json([
@@ -131,6 +152,16 @@ class AuthController extends Controller
                 'status' => 'error',
                 'message' => 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'
             ], 401);
+        }
+
+        // 5. ตรวจสอบสถานะการยืนยันอีเมล
+        // is_null เช็คว่าคอลัมน์นี้ในฐานข้อมูลยังว่างอยู่มั้ยถ้าใช่ = ยังไม่เคยคลิกลิงก์ยืนยันเลย
+        if (is_null($user->email_verified_at)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'บัญชีของคุณยังไม่ได้ยืนยันอีเมล กรุณาตรวจสอบกล่องจดหมายของคุณเพื่อคลิกลิงก์ยืนยัน',
+                'is_verified' => false // ส่งค่าไปให้หน้าบ้าน จะได้แสดงปุ่ม "ส่งอีเมลใหม่อีกครั้ง" ได้
+            ], 403); // 403 Forbidden 
         }
 
         // login สำเร็จ ล้างประวัติ และออก Token
@@ -348,5 +379,89 @@ class AuthController extends Controller
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    // ฟังก์ชันส่งอีเมลยืนยันอีกครั้ง
+    public function resendVerification(Request $request)
+    {
+        // 1. ตรวจสอบข้อมูลอีเมลที่ส่งมาจากหน้าบ้าน
+        $request->validate([
+            'email' => 'required|email'
+        ]);
+
+        // 2. ป้องกันการกดรัวๆ - ให้กดได้ 1 ครั้งต่อ 1 นาทีต่อ 1 IP
+        $throttleKey = 'resend-email|' . $request->ip();
+        if (RateLimiter::tooManyAttempts($throttleKey, 1)) {
+            $seconds = RateLimiter::availableIn($throttleKey);
+            return response()->json([
+                'status' => 'error',
+                'message' => "กรุณารออีก {$seconds} วินาทีก่อนที่จะกดส่งอีเมลใหม่อีกครั้ง"
+            ], 429);
+        }
+        RateLimiter::hit($throttleKey, 60); // บันทึกการกด และจำกัดเวลา 60 วินาที
+
+        // 3. ค้นหาผู้ใช้
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'ไม่พบอีเมลนี้ในระบบ'
+            ], 404);
+        }
+
+        // 4. ถ้าอีเมลนี้ยืนยันไปแล้ว ไม่ต้องส่งซ้ำ
+        if ($user->hasVerifiedEmail()) { // หรือใช้ is_null($user->email_verified_at) == false
+            return response()->json([
+                'status' => 'error',
+                'message' => 'อีเมลนี้ได้รับการยืนยันเรียบร้อยแล้ว สามารถเข้าสู่ระบบได้เลยค่ะ'
+            ], 400);
+        }
+
+        // 5. สร้าง Signed URL ใหม่ 
+        $temporaryVerificationUrl = URL::temporarySignedRoute(
+            'verification.verify', 
+            now()->addMinutes(60), 
+            [
+                'id' => $user->id, 
+                'hash' => sha1($user->email)
+            ]
+        );
+
+        // 6. ส่งอีเมลเข้า Queue
+        Mail::to($user->email)->queue(new VerifyEmailMail($temporaryVerificationUrl));
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'ระบบได้ส่งลิงก์ยืนยันตัวตนใหม่ไปยังอีเมลของคุณแล้วค่ะ'
+        ], 200);
+    }
+
+    // ฟังก์ชันรับลิงก์จากอีเมลเพื่อยืนยัน
+    public function verifyEmail(Request $request, $id, $hash)
+    {
+        // 1. ตรวจสอบว่า Signed URL ถูกต้องและยังไม่หมดอายุหรือไม่
+        if (!$request->hasValidSignature()) {
+            // ถ้ารูปแบบลิงก์ผิดหรือหมดอายุ ให้ส่งผู้ใช้กลับไปหน้าเว็บพร้อมแจ้งเตือน
+            return redirect(env('FRONTEND_URL', 'http://localhost:5173') . '/login?verified=expired');
+        }
+
+        // 2. ค้นหาผู้ใช้ตาม ID ที่ส่งมากับลิงก์
+        $user = User::findOrFail($id);
+
+        // 3. ตรวจสอบแฮชของอีเมลเพื่อความปลอดภัยขั้นสูงสุดว่าตรงกันไหม
+        if (!hash_equals((string) $hash, sha1($user->email))) {
+            return redirect(env('FRONTEND_URL', 'http://localhost:5173') . '/login?verified=invalid');
+        }
+
+        // 4. ตรวจสอบว่าเคยยืนยันไปแล้วหรือยัง ถ้ายังให้บันทึกเวลาปัจจุบันลงไป
+        if (!$user->hasVerifiedEmail()) {
+            $user->email_verified_at = now();
+            $user->save();
+        }
+
+        // 5. ปลดล็อก ทำการ Redirect ผู้ใช้กลับไปยังหน้าจอ Login ของ React/Vite ทันที
+        // พร้อมแนบตัวแปรสำเร็จไปที่ URL เพื่อให้หน้าบ้านแสดงข้อความยินดีต้อนรับ
+        return redirect(env('FRONTEND_URL', 'http://localhost:5173') . '/login?verified=success');
     }
 }
