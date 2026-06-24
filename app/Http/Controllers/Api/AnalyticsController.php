@@ -33,7 +33,8 @@ class AnalyticsController extends Controller
             $referrer = $request->input('referrer_url');
             $safeReferrer = $referrer ? substr($referrer, 0, 255) : null;
 
-            // เช็คว่าภายใน 30 นาทีที่ผ่านมา เซสชันนี้ทำกิจกรรมนี้ไปแล้วหรือยัง (ป้องกันปั่นสถิติ)
+            // ⭐️ ปิดการทำงานระบบดักจับ Anti-Spam ชั่วคราวเพื่อให้เทสได้ง่าย
+            /*
             $recentRecord = Analytic::where('profile_id', $profile->id)
                 ->where('session_id', $sessionId)
                 ->where('block_id', $blockId)
@@ -41,6 +42,9 @@ class AnalyticsController extends Controller
                 ->first();
 
             if (!$recentRecord) {
+            */
+            
+                // บันทึกข้อมูลลงฐานข้อมูลทุกครั้งที่มีการกดคลิกทันที
                 Analytic::create([
                     'profile_id' => $profile->id,
                     'block_id'   => $blockId,
@@ -49,7 +53,10 @@ class AnalyticsController extends Controller
                     'user_agent' => $request->header('User-Agent'),
                     'referrer_url' => $safeReferrer,
                 ]);
+
+            /*
             }
+            */
 
             return response()->json(['success' => true]);
 
