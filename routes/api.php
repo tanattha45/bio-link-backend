@@ -43,7 +43,12 @@ Route::get('/profiles/{username}', [ProfileController::class, 'showPublic']);
 Route::put('/profiles/{username}/test-update', [ProfileController::class, 'updateForTest']);
 Route::post('/analytics/track/{username}', [AnalyticsController::class, 'track']);
 
+// เส้นทางสำหรับให้หน้าบ้าน (React) กดขอส่งอีเมลใหม่อีกครั้ง
+Route::post('/email/verification-notification', [AuthController::class, 'resendVerification']);
 
+// เส้นทางสำหรับรองรับการคลิกลิงก์ยาวๆ จากในอีเมล
+Route::get('/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])
+     ->name('verification.verify');
 
 //  Protected Routes (ต้องส่ง Bearer Token)
 Route::middleware('auth:sanctum')->group(function () {
