@@ -166,7 +166,7 @@ class AuthController extends Controller
         }
 
         // สุ่ม opt 4 หลัก
-        $otp = rand(1000,9999);
+        $otp = random_int(1000, 9999);
 
         // บันทึกรหัสลงหน่วยความจำ Cache ตั้งเวลาหมดอายุไว้ที่ 5 นาที (300 วินาที)
         // ตั้งชื่อคีย์ตามอีเมล เช่น 'otp_tanattha@gmail.com' เพื่อป้องกันข้อมูลสลับกันคนอื่น
@@ -174,7 +174,7 @@ class AuthController extends Controller
 
         try {
             //สั่งส่งอีเมลจำลองออกไปหาผู้ใช้ (ปลายทางจะไปโผล่ที่ Mailtrap ของเรา)
-            Mail::to($request->email)->send(new OtpMail($otp));
+            Mail::to($request->email)->queue(new OtpMail($otp));
 
             return response()->json([
                 'status' => 'success',

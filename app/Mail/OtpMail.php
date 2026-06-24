@@ -17,7 +17,9 @@ use Illuminate\Mail\Mailables\Envelope;
 // ตัวแปลงใช้คู่กับ คิว เพื่อให้ดึงแค่ ID ของผู้ใช้งาน ไปเก้บในคิว
 use Illuminate\Queue\SerializesModels;
 
-class OtpMail extends Mailable
+use Illuminate\Contracts\Queue\ShouldQueue;
+
+class OtpMail extends Mailable implements ShouldQueue
 {
     use Queueable, SerializesModels;
 
