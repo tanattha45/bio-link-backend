@@ -75,9 +75,11 @@ class AuthController extends Controller
         ]);
 
         // 3. สร้าง Temporary Signed URL (ลิงก์ยืนยันตัวตนแบบจำกัดเวลา 60 นาที)
+        $expireMinutes = config('auth.verification.expire', 60);
+
         $temporaryVerificationUrl = URL::temporarySignedRoute(
             'verification.verify', 
-            now()->addMinutes(60), 
+            now()->addMinutes($expireMinutes), 
             [
                 'id' => $user->id, 
                 'hash' => sha1($user->email)
@@ -419,9 +421,13 @@ class AuthController extends Controller
         }
 
         // 5. สร้าง Signed URL ใหม่ 
+
+        // ระบบจะไปหา expire ใน config/auth.php ก่อนหากหาไม่เจอถึงจะมาหยิบตัวเลข
+        $expireMinutes = config('auth.verification.expire', 60);
+
         $temporaryVerificationUrl = URL::temporarySignedRoute(
             'verification.verify', 
-            now()->addMinutes(60), 
+            now()->addMinutes($expireMinutes), 
             [
                 'id' => $user->id, 
                 'hash' => sha1($user->email)
@@ -439,29 +445,28 @@ class AuthController extends Controller
 
     // ฟังก์ชันรับลิงก์จากอีเมลเพื่อยืนยัน
     public function verifyEmail(Request $request, $id, $hash)
-    {
-        // 1. ตรวจสอบว่า Signed URL ถูกต้องและยังไม่หมดอายุหรือไม่
-        if (!$request->hasValidSignature()) {
-            // ถ้ารูปแบบลิงก์ผิดหรือหมดอายุ ให้ส่งผู้ใช้กลับไปหน้าเว็บพร้อมแจ้งเตือน
-            return redirect(env('FRONTEND_URL', 'http://localhost:5173') . '/login?verified=expired');
-        }
-
-        // 2. ค้นหาผู้ใช้ตาม ID ที่ส่งมากับลิงก์
-        $user = User::findOrFail($id);
-
-        // 3. ตรวจสอบแฮชของอีเมลเพื่อความปลอดภัยขั้นสูงสุดว่าตรงกันไหม
-        if (!hash_equals((string) $hash, sha1($user->email))) {
-            return redirect(env('FRONTEND_URL', 'http://localhost:5173') . '/login?verified=invalid');
-        }
-
-        // 4. ตรวจสอบว่าเคยยืนยันไปแล้วหรือยัง ถ้ายังให้บันทึกเวลาปัจจุบันลงไป
-        if (!$user->hasVerifiedEmail()) {
-            $user->email_verified_at = now();
-            $user->save();
-        }
-
-        // 5. ปลดล็อก ทำการ Redirect ผู้ใช้กลับไปยังหน้าจอ Login ของ React/Vite ทันที
-        // พร้อมแนบตัวแปรสำเร็จไปที่ URL เพื่อให้หน้าบ้านแสดงข้อความยินดีต้อนรับ
-        return redirect(env('FRONTEND_URL', 'http://localhost:5173') . '/login?verified=success');
+{
+    if (!$request->hasValidSignature()) {
+        return redirect(
+            env('FRONTEND_URL') . '/login?verified=expired'
+        );
     }
+
+    $user = User::findOrFail($id);
+
+    if (!hash_equals((string)$hash, sha1($user->email))) {
+        return redirect(
+            env('FRONTEND_URL') . '/login?verified=invalid'
+        );
+    }
+
+    if (!$user->hasVerifiedEmail()) {
+        $user->email_verified_at = now();
+        $user->save();
+    }
+
+    return redirect(
+        env('FRONTEND_URL') . '/login?verified=success'
+    );
+}
 }
