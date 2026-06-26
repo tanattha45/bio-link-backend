@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Analytic;
 use App\Models\Profile;
-use App\Models\Block; // ⭐️ เพิ่ม Import Model Block เข้ามา
+use App\Models\Block;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -77,80 +77,165 @@ class AnalyticsController extends Controller
             return response()->json(['message' => 'Profile not found'], 404);
         }
 
-        // ยอดวิวทั้งหมด (block_id เป็น null)
-        $totalViews = Analytic::where('profile_id', $profile->id)->whereNull('block_id')->count();
+        // =========================================================
+        // ⭐️ ย้ายการรับค่าวันที่ขึ้นมาด้านบนสุด เพื่อให้กรองข้อมูลได้ทั้งหมด
+        // =========================================================
         
-        // ยอดคลิกลิงก์ทั่วไป (block_id มีค่า และไม่ใช่รหัส Save Contact)
+        $range = $request->query('range', '7days');
+        $startDate = Carbon::now()->startOfDay();
+        $endDate = Carbon::now()->endOfDay();
+        $daysCount = 7;
+
+        if ($range === 'today') {
+            $startDate = Carbon::now()->startOfDay();
+            $daysCount = 1;
+        } elseif ($range === '7days') {
+            $startDate = Carbon::now()->subDays(6)->startOfDay();
+            $daysCount = 7;
+        } elseif ($range === '30days') {
+            $startDate = Carbon::now()->subDays(29)->startOfDay();
+            $daysCount = 30;
+        } elseif ($range === 'custom') {
+            $startInput = $request->query('start');
+            $endInput = $request->query('end');
+            
+            if ($startInput && $endInput) {
+                $startDate = Carbon::parse($startInput)->startOfDay();
+                $endDate = Carbon::parse($endInput)->endOfDay();
+                // แก้บั๊กจำนวนวันเพี้ยน โดยจับเริ่ม 00:00 ทั้งคู่มาเทียบกัน
+                $daysCount = max(1, $startDate->copy()->startOfDay()->diffInDays($endDate->copy()->startOfDay()) + 1);
+            } else {
+                $startDate = Carbon::now()->subDays(6)->startOfDay();
+                $daysCount = 7;
+            }
+        }
+
+        // =========================================================
+        // ⭐️ คำนวณวันที่ของ "ช่วงก่อนหน้า" (Previous Period) 
+        // =========================================================
+        $prevEndDate = $startDate->copy()->subSecond(); // วินาทีสุดท้ายก่อนเริ่ม startDate
+        $prevStartDate = $startDate->copy()->subDays($daysCount)->startOfDay();
+
+        // =========================================================
+        // ⭐️ นำ $startDate และ $endDate มาใช้กรองข้อมูลในการ์ดทั้ง 5 ใบ
+        // =========================================================
+
+        // ยอดวิว (กรองตามวันที่)
+        $totalViews = Analytic::where('profile_id', $profile->id)
+            ->whereNull('block_id')
+            ->whereBetween('created_at', [$startDate, $endDate])
+            ->count();
+        
+        // ยอดคลิก (กรองตามวันที่)
         $totalClicks = Analytic::where('profile_id', $profile->id)
             ->whereNotNull('block_id')
             ->where('block_id', '!=', 999999)
+            ->whereBetween('created_at', [$startDate, $endDate])
             ->count();
             
-        // ยอดกด Save Contact (block_id เป็น 999999)
+        // ยอดกด Save Contact (กรองตามวันที่)
         $totalSaves = Analytic::where('profile_id', $profile->id)
             ->where('block_id', 999999)
+            ->whereBetween('created_at', [$startDate, $endDate])
             ->count();
         
         $ctr = $totalViews > 0 ? round(($totalClicks / $totalViews) * 100, 1) : 0;
 
-        // --- ระบบกราฟ 7 วัน (ไม่มีฟันหลอ และแก้ปัญหา Timezone) ---
-        $skeletonData = [];
-        for ($i = 6; $i >= 0; $i--) {
-            $dateString = Carbon::now()->subDays($i)->format('Y-m-d');
-            $skeletonData[$dateString] = 0;
-        }
-
-        $sevenDaysAgo = Carbon::now()->subDays(6)->startOfDay();
+        // =========================================================
+        // ⭐️ --- ดึงข้อมูลช่วงก่อนหน้า (เพื่อเอามาเทียบ %) ---
+        // =========================================================
         
-        // ดึงข้อมูลมาก่อน แล้วใช้ Collection ของ Laravel จัดกลุ่มตามวันที่
-        $analyticsData = Analytic::where('profile_id', $profile->id)
-            ->whereNull('block_id') 
-            ->where('created_at', '>=', $sevenDaysAgo)
-            ->get();
+        $prevViews = Analytic::where('profile_id', $profile->id)
+            ->whereNull('block_id')
+            ->whereBetween('created_at', [$prevStartDate, $prevEndDate])
+            ->count();
+            
+        $prevClicks = Analytic::where('profile_id', $profile->id)
+            ->whereNotNull('block_id')
+            ->where('block_id', '!=', 999999)
+            ->whereBetween('created_at', [$prevStartDate, $prevEndDate])
+            ->count();
+            
+        $prevSaves = Analytic::where('profile_id', $profile->id)
+            ->where('block_id', 999999)
+            ->whereBetween('created_at', [$prevStartDate, $prevEndDate])
+            ->count();
+            
+        $prevCtr = $prevViews > 0 ? round(($prevClicks / $prevViews) * 100, 1) : 0;
 
-        // จับกลุ่มข้อมูลตามวันที่แบบเป๊ะๆ ด้วย Carbon
-        $groupedData = $analyticsData->groupBy(function($item) {
-            return $item->created_at->format('Y-m-d');
-        });
+        // ⭐️ ฟังก์ชันคำนวณ % การเติบโต
+        $calcTrend = function($current, $prev) {
+            if ($prev == 0) return $current > 0 ? 100 : 0; // ถ้าของเก่าเป็น 0 และของใหม่มีค่า ให้ถือว่าโต 100%
+            return round((($current - $prev) / $prev) * 100, 1);
+        };
 
-        // เอาจำนวนที่นับได้ไปหยอดใส่โครงกราฟ 7 วันที่เราเตรียมไว้
-        foreach ($skeletonData as $date => $count) {
-            if ($groupedData->has($date)) {
-                $skeletonData[$date] = $groupedData->get($date)->count();
-            }
-        }
+        $trend = [
+            'views'  => $calcTrend($totalViews, $prevViews),
+            'clicks' => $calcTrend($totalClicks, $prevClicks),
+            'saves'  => $calcTrend($totalSaves, $prevSaves),
+            'ctr'    => $calcTrend($ctr, $prevCtr),
+        ];
 
+        // =========================================================
+        // ⭐️ ระบบกราฟ
+        // =========================================================
+        
+        // 1. ดึงข้อมูล View (บังคับจัดกลุ่มวันตาม Timezone ไทย ป้องกันวันเหลื่อม)
+        $viewsData = Analytic::where('profile_id', $profile->id)
+            ->whereNull('block_id')
+            ->whereBetween('created_at', [$startDate, $endDate])
+            ->get()
+            ->groupBy(fn($item) => Carbon::parse($item->created_at)->setTimezone('Asia/Bangkok')->format('Y-m-d'));
+
+        // 2. ดึงข้อมูล Click (บังคับจัดกลุ่มวันตาม Timezone ไทย ป้องกันวันเหลื่อม)
+        $clicksData = Analytic::where('profile_id', $profile->id)
+            ->whereNotNull('block_id')
+            ->where('block_id', '!=', 999999)
+            ->whereBetween('created_at', [$startDate, $endDate])
+            ->get()
+            ->groupBy(fn($item) => Carbon::parse($item->created_at)->setTimezone('Asia/Bangkok')->format('Y-m-d'));
+
+        // 3. เตรียมข้อมูลใส่ Array ให้ตรงกับวันที่
         $chartData = [];
         $thaiDays = [
             'Sunday' => 'อา', 'Monday' => 'จ', 'Tuesday' => 'อ', 
             'Wednesday' => 'พ', 'Thursday' => 'พฤ', 'Friday' => 'ศ', 'Saturday' => 'ส'
         ];
 
-        foreach ($skeletonData as $date => $count) {
-            $dayNameEnglish = Carbon::parse($date)->format('l'); 
+        // เปลี่ยนมาใช้การ "นับเดินหน้า" (+0, +1, +2 วัน) จาก startDate 
+        for ($i = 0; $i < $daysCount; $i++) {
+            $date = $startDate->copy()->addDays($i)->format('Y-m-d');
+            $dayName = $thaiDays[Carbon::parse($date)->format('l')];
+            
+            // ดึงจำนวนออกมา (ถ้าไม่มีให้เป็น 0)
+            $viewsCount = $viewsData->has($date) ? $viewsData->get($date)->count() : 0;
+            $clicksCount = $clicksData->has($date) ? $clicksData->get($date)->count() : 0;
+
             $chartData[] = [
                 'date' => $date,
-                'day_name' => $thaiDays[$dayNameEnglish],
-                'views' => $count
+                'day_name' => $dayName,
+                'views' => $viewsCount,
+                'clicks' => $clicksCount 
             ];
         }
 
         // =========================================================
-        // ⭐️ 3. เพิ่มระบบดึงประสิทธิภาพลิงก์ (โชว์ทุกลิงก์ แม้คลิกจะเป็น 0)
+        // ⭐️ ประสิทธิภาพลิงก์ (กรองตามวันที่)
         // =========================================================
         
-        // 3.1 ดึงบล็อกทั้งหมดของโปรไฟล์นี้มา
+        // ดึงบล็อกทั้งหมดของโปรไฟล์นี้มา
         $blocks = Block::where('profile_id', $profile->id)->get();
         
-        // 3.2 นับยอดคลิกแยกรหัสบล็อก (ดึงจาก Analytic แบบ Group By จะไวกว่ามาก)
+        // นับยอดคลิกแยกรหัสบล็อก (ดึงจาก Analytic และกรองตามวันที่)
         $blockClicks = Analytic::where('profile_id', $profile->id)
             ->whereNotNull('block_id')
             ->where('block_id', '!=', 999999)
+            ->whereBetween('created_at', [$startDate, $endDate]) // ⭐️ เพิ่มตัวกรองตรงนี้
             ->select('block_id', DB::raw('count(*) as total'))
             ->groupBy('block_id')
             ->pluck('total', 'block_id');
 
-        // 3.3 เอาข้อมูลบล็อกมารวมกับยอดคลิก
+        // เอาข้อมูลบล็อกมารวมกับยอดคลิก
         $linksPerformance = $blocks->map(function ($block) use ($blockClicks) {
             // ถอดรหัส JSON ของ content_data ถ้าจำเป็น
             $contentData = is_string($block->content_data) ? json_decode($block->content_data, true) : $block->content_data;
@@ -182,8 +267,9 @@ class AnalyticsController extends Controller
                 'total_clicks' => $totalClicks,
                 'total_saves'  => $totalSaves,
                 'ctr'          => $ctr,
+                'trend'        => $trend, // ⭐️ ส่งก้อน Trend กลับไปให้หน้าบ้าน
                 'chart_data'   => $chartData,
-                'links'        => $linksPerformance, // ⭐️ ส่งข้อมูลลิงก์ไปให้ React
+                'links'        => $linksPerformance, 
             ]
         ]);
     }
