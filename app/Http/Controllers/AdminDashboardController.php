@@ -2,13 +2,14 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
-use App\Models\User;
-use Carbon\Carbon;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Http\Request; // Request การรับข้อมูลจาก API 
+use App\Models\User; // Model ของตาราง users
+use Carbon\Carbon; // จัดการวันเวลา
+use Illuminate\Support\Facades\DB; // คิวรี่ดาต้าเบสโดยตรง
 
 class AdminDashboardController extends Controller
 {
+    // ถ้า frontend เรียก API (GET.......) laravel จะมาเข้าฟังก์ชั่นนี้
     public function getDashboardStats(Request $request)
     {
         // 1. เช็คสิทธิ์ Admin
@@ -21,15 +22,20 @@ class AdminDashboardController extends Controller
             $startDate = $request->query('startDate');
             $endDate = $request->query('endDate');
 
+            // ตรวจสอบว่าผู้ใช้ส่งข้อมูลมาครบมั้ย ถ้าส่งมาไม่ครบจะreturn error 
+            // startOfDay() และ endOfDay() ไม่งั้น ข้อมูลวันที่ 30 หลังเที่ยงคืนจะไม่ถูกนับ หลุดจาก query
             if (!$startDate || !$endDate) {
                 return response()->json(['status' => 'error', 'message' => 'กรุณาระบุช่วงวันที่ให้ครบถ้วน'], 400);
             }
 
+            // แปลง String เป็น Carbon ($startDate = "2025-06-01"; -> 2025-06-01 00:00:00 )
             $start = Carbon::parse($startDate)->startOfDay();
             $end = Carbon::parse($endDate)->endOfDay();
             
+            // Carbon นับ "ระยะห่าง" 30-1 = 29 เราเลยต้อง +1 เพื่อให้มันแสดงผลเป็น 30 วัน
             $diffInDays = $start->diffInDays($end) + 1;
 
+            // คำนวณช่วงก่อนหน้า เราใช้ copy เพราะ carbon มันจะแก้ค่า start เราจึงต้อง copy ไว้
             $prevStart = $start->copy()->subDays($diffInDays)->startOfDay();
             $prevEnd = $start->copy()->subDays(1)->endOfDay();
 
@@ -48,6 +54,11 @@ class AdminDashboardController extends Controller
             $prevTotalUsers = User::where('created_at', '<=', $prevEnd)->count();
 
             // 5. ดึงข้อมูล "บล็อกทั้งหมด"
+            // JSON_LENGTH เป็นตัวถามใน content data ว่าในนั้นมีอยู่กี่รายการ
+            //  DB::table ให้ไปดูในตาราง blocks 
+            // ถ้าเราใช้ count จะนับเป้นแถวแต่เราต้องการนับลึกลงไปอีกจึงใช้ sum(JSON_LENGTH(...)) แทน
+            // $prevStart, $prevEnd = ใช้ดึงข้อมูลย้อนหลังมาเทียบ เพื่อคำนวณ % เพิ่มขึ้นหรือลดลง
+            // $start, $end = ใช้ดึงข้อมูลที่จะแสดงให้ Admin เห็น
             $currentBlocks = DB::table('blocks')
                 ->whereBetween('created_at', [$start, $end])
                 ->sum(DB::raw('JSON_LENGTH(content_data)')) ?? 0;
@@ -56,11 +67,10 @@ class AdminDashboardController extends Controller
                 ->whereBetween('created_at', [$prevStart, $prevEnd])
                 ->sum(DB::raw('JSON_LENGTH(content_data)')) ?? 0;
 
-            // 6. ดึงข้อมูล "บัญชีที่ไม่มีการอัปเดตเกิน 30 วัน"
-            $thirtyDaysAgo = Carbon::now()->subDays(30);
-            $inactiveAccounts = User::where('updated_at', '<', $thirtyDaysAgo)->count();
 
-            // ดึงข้อมูล "ยอดคลิกรวม" (ไม่นับ Save Contact)
+            // 6. ดึงข้อมูล "ยอดคลิกรวม" (ไม่นับ Save Contact)
+            // เอาคอลัมน์ block_id มาใช้โดยค่าในคอลัมน์นี้ต้อง ไม่เป็น NULL เพราะ คือการเข้าชมโปนไฟล์ไม่ใช่การคลิ๊ก
+            // block_id', '!=', 999999 คือ เลือกเฉพาะข้อมูลที่ block_id ไม่เท่ากับ 999999 เพราะ มันคือ save contact
             $currentClicks = DB::table('analytics')
                 ->whereNotNull('block_id')
                 ->where('block_id', '!=', 999999)
@@ -98,6 +108,7 @@ class AdminDashboardController extends Controller
 
             // 7. ดึงข้อมูลสำหรับกราฟ (Traffic Chart)
             // 7.1 ดึงข้อมูลรายวันของแต่ละสถิติ (ใช้ pluck เพื่อจัดให้อยู่ในรูป ['Y-m-d' => count])
+            // นับยอด View แยกตามวัน
             $dailyViews = DB::table('analytics')
                 ->select(DB::raw('DATE(created_at) as date'), DB::raw('COUNT(*) as count'))
                 ->whereBetween('created_at', [$start, $end])->whereNull('block_id')
