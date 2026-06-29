@@ -8,6 +8,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\Api\BlockController;
 use App\Http\Controllers\Api\AnalyticsController;
 use App\Http\Controllers\AdminController;
+use App\Http\Controllers\AdminDashboardController;
 
 
 // Public Routes (ไม่ต้องใช้ Token)
@@ -71,9 +72,11 @@ Route::middleware('auth:sanctum')->group(function () {
     // Logout
     Route::post('/logout', [AuthController::class, 'logout']);
 
-    // ตรวจสอบให้แน่ใจว่าเรียกใช้คลาส AdminController ถูกต้อง
+    // Admin
     Route::get('/admin', [AdminController::class, 'getUsers']);
     Route::put('/admin/{id}/role', [AdminController::class, 'updateRole']);
     Route::put('/admin/{id}/status', [AdminController::class, 'toggleStatus']);
     Route::delete('/admin/{id}', [AdminController::class, 'deleteUser']);
+
+    Route::get('/admin/dashboard-stats', [AdminDashboardController::class, 'getDashboardStats']);
 });
