@@ -27,7 +27,7 @@ class BlockController extends Controller
         // ตรวจสอบความถูกต้องของข้อมูล 
         // บังคับให้ content_data ต้องเป็น Array เพื่อให้ Laravel แปลงเป็น JSON ได้สมบูรณ์
         $validated = $request->validate([
-            'type' => 'required|string', 
+            'type' => 'required|string|in:LINK,IMAGE,VIDEO,SLIDER,SHOP',
             'title' => 'nullable|string|max:255',
             'content_data' => 'nullable|array' 
         ]);
