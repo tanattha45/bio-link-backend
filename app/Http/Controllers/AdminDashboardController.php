@@ -229,76 +229,99 @@ class AdminDashboardController extends Controller
     }
 
     // จัดอันดับ Top Pages
-    // 👨‍🍳 พ่อครัวแผนกที่ 3: จัดอันดับ Top Pages (ดึงของจริงทั้งหมด)
     private function getTopPagesData($start, $end, $prevStart, $prevEnd)
     {
-        return DB::table('profiles')
-            ->leftJoin('analytics', 'profiles.id', '=', 'analytics.profile_id')
-            ->select(
-                'profiles.id',
-                'profiles.username as name', 
-                'profiles.username as link',
-                // 1. Views รอบปัจจุบัน
-                DB::raw("COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) as views"),
-                // 2. Views รอบก่อนหน้า (เพื่อเอาไปหา Growth)
-                DB::raw("COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$prevStart}' AND '{$prevEnd}' THEN 1 END) as prev_views"),
-                // 3. Clicks รอบปัจจุบัน
-                DB::raw("COUNT(CASE WHEN analytics.block_id IS NOT NULL AND analytics.block_id != 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) as clicks"),
-                // 4. 🌟 Saves รอบปัจจุบัน (รหัส 999999)
-                DB::raw("COUNT(CASE WHEN analytics.block_id = 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) as saves")
-            )
-            // ขยายกรอบเวลาให้ครอบคลุมทั้งอดีตและปัจจุบัน
-            ->whereBetween('analytics.created_at', [$prevStart, $end])
-            ->groupBy('profiles.id', 'profiles.username')
-            ->orderBy('views', 'desc') // เรียงตามยอดวิวปัจจุบัน
-            ->limit(5)
-            ->get()
-            // 🌟 ใช้ use ($start, $end) เพื่อส่งตัวแปรเวลาเข้าไปในลูปด้วย
-            ->map(function($page) use ($start, $end) {
-                
-                // --- 🌟 ระบบค้นหา Popular Link ของเพจนี้ ---
-                // วิ่งไปหาว่า block_id ไหนของโปรไฟล์นี้ ที่ถูกคลิกเยอะที่สุดในช่วงเวลานี้
-                $popularBlock = DB::table('analytics')
-                    ->select('block_id', DB::raw('COUNT(*) as click_count'))
-                    ->where('profile_id', $page->id)
-                    ->whereNotNull('block_id')
-                    ->where('block_id', '!=', 999999) // ไม่นับ Save
-                    ->whereBetween('created_at', [$start, $end])
-                    ->groupBy('block_id')
-                    ->orderBy('click_count', 'desc')
-                    ->first();
+    return DB::table('profiles')
+        ->leftJoin('analytics', 'profiles.id', '=', 'analytics.profile_id')
+        ->select(
+            'profiles.id',
+            'profiles.username as name', 
+            'profiles.username as link',
+            
+            // 1. Views (ผู้เข้าชม) รอบปัจจุบัน
+            // นับเฉพาะที่ไม่มี block_id (แปลว่าเข้ามาดูหน้าโปรไฟล์เฉยๆ)
+            DB::raw("COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) as views"),
+            
+            // 2. Views รอบก่อนหน้า (เอาไว้ใช้เทียบเปอร์เซ็นต์การเติบโต)
+            DB::raw("COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$prevStart}' AND '{$prevEnd}' THEN 1 END) as prev_views"),
+            
+            // 3. Clicks (ยอดกดลิงก์) รอบปัจจุบัน
+            // นับเฉพาะที่มี block_id และต้องไม่ใช่เลข 999999 (ปุ่มเซฟ)
+            DB::raw("COUNT(CASE WHEN analytics.block_id IS NOT NULL AND analytics.block_id != 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) as clicks"),
+            
+            // 4. Saves (ยอดเซฟคอนแทค) รอบปัจจุบัน
+            // นับเฉพาะ action ที่เป็นรหัส 999999
+            DB::raw("COUNT(CASE WHEN analytics.block_id = 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) as saves")
+        )
+        ->whereBetween('analytics.created_at', [$prevStart, $end])
+        ->groupBy('profiles.id', 'profiles.username')
+        
+        // เรียงลำดับจากคะแนน "คุณภาพ" แทนยอดวิวธรรมดา 
+        // ให้น้ำหนัก: View = 1 แต้ม, Click = 5 แต้ม, Save = 15 แต้ม
+        ->orderByRaw("(
+            (COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) * 1) +
+            (COUNT(CASE WHEN analytics.block_id IS NOT NULL AND analytics.block_id != 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) * 5) +
+            (COUNT(CASE WHEN analytics.block_id = 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) * 15)
+        ) DESC")
+        ->limit(5)
+        ->get()
+        ->map(function($page) use ($start, $end) {
+            
+            // --- ระบบค้นหา Popular Link ของเพจนี้ ---
+            $popularBlock = DB::table('analytics')
+                ->select('block_id', DB::raw('COUNT(*) as click_count'))
+                ->where('profile_id', $page->id)
+                ->whereNotNull('block_id')
+                ->where('block_id', '!=', 999999)
+                ->whereBetween('created_at', [$start, $end])
+                ->groupBy('block_id')
+                ->orderBy('click_count', 'desc')
+                ->first();
 
-                $popularTitle = 'ยังไม่มีข้อมูลคลิก';
-                $popularClicks = 0;
+            $popularTitle = 'ยังไม่มีข้อมูลคลิก';
+            $popularClicks = 0;
 
-                // ถ้ามีคนเคยคลิกอย่างน้อย 1 ครั้ง ให้ไปดึงชื่อ Link จากตาราง blocks มาโชว์
-                if ($popularBlock) {
-                    $block = DB::table('blocks')->where('id', $popularBlock->block_id)->first();
-                    // ตรวจสอบว่าลิงก์ยังอยู่ ไม่ได้ถูกผู้ใช้ลบทิ้งไปแล้ว
-                    $popularTitle = ($block && $block->title) ? $block->title : 'ลิงก์ที่ไม่มีชื่อ';
-                    $popularClicks = (int)$popularBlock->click_count;
-                }
-                // ------------------------------------------
+            if ($popularBlock) {
+                $block = DB::table('blocks')->where('id', $popularBlock->block_id)->first();
+                $popularTitle = ($block && $block->title) ? $block->title : 'ลิงก์ที่ไม่มีชื่อ';
+                $popularClicks = (int)$popularBlock->click_count;
+            }
+    
+            // แปลงค่าเป็นตัวเลขเพื่อนำมาคำนวณต่อ
+            $views = (int)$page->views;
+            $clicks = (int)$page->clicks;
+            $saves = (int)$page->saves;
+            $prevViews = (int)$page->prev_views;
 
-                return [
-                    'id' => $page->id,
-                    'name' => '@' . $page->name, 
-                    'link' => 'bio.link/' . $page->link,
-                    'views' => (int)$page->views,
-                    'clicks' => (int)$page->clicks,
-                    'saves' => (int)$page->saves, 
-                    
-                    //  คำนวณ Growth จริง โดยเรียกใช้ฟังก์ชัน calculateTrend
-                    'growth' => $this->calculateTrend((int)$page->views, (int)$page->prev_views),
-                    
-                    // แพ็กข้อมูล Popular Link ส่งไปให้หน้าบ้าน
-                    'popular_link' => [
-                        'title' => $popularTitle,
-                        'clicks' => $popularClicks
-                    ]
-                ];
-            });
-    }
+            // 1. คำนวณ Growth (อัตราการเติบโต)
+            $growth = $this->calculateTrend($views, $prevViews);
+
+            // 2. คำนวณ CTR (Click-Through Rate) ป้องกันการหารด้วย 0
+            $ctr = $views > 0 ? round(($clicks / $views) * 100, 1) : 0.0;
+
+            // 3. คำนวณ Performance Score ขั้นสุดท้าย 
+            $baseScore = ($views * 1) + ($clicks * 5) + ($saves * 15);
+            // จำกัดโบนัสการเติบโตไว้สูงสุดที่ 50% เพื่อป้องกัน "กับดักตัวเลขน้อย" ที่เพจเล็กๆ โต 400% แล้วคะแนนเวอร์
+            $growthBonus = min($growth, 50) * 0.01; 
+            $finalScore = round($baseScore * (1 + $growthBonus), 2);
+
+            return [
+                'id' => $page->id,
+                'name' => '@' . $page->name, 
+                'link' => 'bio.link/' . $page->link,
+                'views' => $views,
+                'clicks' => $clicks,
+                'saves' => $saves, 
+                'ctr' => $ctr,          // ส่งค่า CTR ไปให้หน้าบ้าน
+                'score' => $finalScore, // ส่งค่า Score ไปให้หน้าบ้านจัดเรียงได้เลย
+                'growth' => $growth,
+                'popular_link' => [
+                    'title' => $popularTitle,
+                    'clicks' => $popularClicks
+                ]
+            ];
+        });
+}
 
     // คำนวณเปอร์เซ็นต์ 
     private function calculateTrend($curr, $prev) 
