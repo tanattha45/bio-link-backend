@@ -24,39 +24,24 @@ class AnalyticsController extends Controller
 
             $sessionId = $request->input('session_id');
             $blockId = $request->input('block_id');
+            // 🌟 รับค่า URL ที่ถูกคลิกจากหน้าบ้าน
+            $clickedUrl = $request->input('clicked_url'); 
+            
             $ipAddress = $request->ip();
-
-            // เข้ารหัส IP แล้วตัดความยาวให้เหลือแค่ 45 ตัวอักษร (ป้องกัน DB ล้น)
             $hashedIp = $ipAddress ? substr(hash('sha256', $ipAddress), 0, 45) : null;
-
-            // ตัดความยาว URL ของ referrer ไม่ให้เกิน 255 ตัวอักษร
+            
             $referrer = $request->input('referrer_url');
             $safeReferrer = $referrer ? substr($referrer, 0, 255) : null;
 
-            // ⭐️ ปิดการทำงานระบบดักจับ Anti-Spam ชั่วคราวเพื่อให้เทสได้ง่าย
-            /*
-            $recentRecord = Analytic::where('profile_id', $profile->id)
-                ->where('session_id', $sessionId)
-                ->where('block_id', $blockId)
-                ->where('created_at', '>=', Carbon::now()->subMinutes(30))
-                ->first();
-
-            if (!$recentRecord) {
-            */
-            
-                // บันทึกข้อมูลลงฐานข้อมูลทุกครั้งที่มีการกดคลิกทันที
-                Analytic::create([
-                    'profile_id' => $profile->id,
-                    'block_id'   => $blockId,
-                    'session_id' => $sessionId,
-                    'ip_address' => $hashedIp,
-                    'user_agent' => $request->header('User-Agent'),
-                    'referrer_url' => $safeReferrer,
-                ]);
-
-            /*
-            }
-            */
+            Analytic::create([
+                'profile_id' => $profile->id,
+                'block_id'   => $blockId,
+                'clicked_url'=> $clickedUrl, // 🌟 บันทึกลงฐานข้อมูล
+                'session_id' => $sessionId,
+                'ip_address' => $hashedIp,
+                'user_agent' => $request->header('User-Agent'),
+                'referrer_url' => $safeReferrer,
+            ]);
 
             return response()->json(['success' => true]);
 
@@ -219,47 +204,97 @@ class AnalyticsController extends Controller
             ];
         }
 
-        // =========================================================
-        // ⭐️ ประสิทธิภาพลิงก์ (กรองตามวันที่)
-        // =========================================================
-        
-        // ดึงบล็อกทั้งหมดของโปรไฟล์นี้มา
-        $blocks = Block::where('profile_id', $profile->id)->get();
-        
-        // นับยอดคลิกแยกรหัสบล็อก (ดึงจาก Analytic และกรองตามวันที่)
-        $blockClicks = Analytic::where('profile_id', $profile->id)
-            ->whereNotNull('block_id')
-            ->where('block_id', '!=', 999999)
-            ->whereBetween('created_at', [$startDate, $endDate]) // ⭐️ เพิ่มตัวกรองตรงนี้
-            ->select('block_id', DB::raw('count(*) as total'))
-            ->groupBy('block_id')
-            ->pluck('total', 'block_id');
+// =========================================================
+// ⭐️ ประสิทธิภาพลิงก์ (เวอร์ชันเสถียรสูงสุด - แก้ไขเรื่อง Type ID และการแกะ URL)
+// =========================================================
 
-        // เอาข้อมูลบล็อกมารวมกับยอดคลิก
-        $linksPerformance = $blocks->map(function ($block) use ($blockClicks) {
-            // ถอดรหัส JSON ของ content_data ถ้าจำเป็น
-            $contentData = is_string($block->content_data) ? json_decode($block->content_data, true) : $block->content_data;
-            
-            // พยายามหา URL มาโชว์ (ดึงจาก item แรก)
-            $url = '';
-            if (is_array($contentData) && count($contentData) > 0) {
-                $url = $contentData[0]['url'] ?? $contentData[0]['link'] ?? '';
-            }
+$blocks = Block::where('profile_id', $profile->id)->get();
+    
+// ดึงยอดคลิกกรุปรวมแยกตาม block_id
+$blockClicks = Analytic::where('profile_id', $profile->id)
+    ->whereNotNull('block_id')
+    ->where('block_id', '!=', 999999)
+    ->whereBetween('created_at', [$startDate, $endDate])
+    ->select('block_id', DB::raw('count(*) as total'))
+    ->groupBy('block_id')
+    ->pluck('total', 'block_id');
 
-            return [
-                'id' => $block->id,
-                'title' => $block->title ?: 'ไม่มีชื่อลิงก์',
+// ดึงรายละเอียดตัว Analytic เผื่อไว้ใช้สำหรับกลุ่มบล็อกย่อย (Slider/Shop)
+$allClicksDetail = Analytic::where('profile_id', $profile->id)
+    ->whereNotNull('block_id')
+    ->where('block_id', '!=', 999999)
+    ->whereBetween('created_at', [$startDate, $endDate])
+    ->get();
+
+$linksPerformance = collect();
+
+foreach ($blocks as $block) {
+    $contentData = is_string($block->content_data) ? json_decode($block->content_data, true) : $block->content_data;
+
+    // ตรวจสอบว่าเป็น Array แบบหลายลิงก์ย่อย (เช่น Slider/Shop) 
+    if (is_array($contentData) && isset($contentData[0]) && is_array($contentData[0])) {
+        foreach ($contentData as $item) {
+            $url = trim($item['url'] ?? $item['link'] ?? '');
+            if (empty($url)) continue;
+
+            // คัดกรองนับจำนวนคลิกของลิงก์ย่อย
+            $clicks = $allClicksDetail->filter(function($item_click) use ($block, $url) {
+                return $item_click->block_id == $block->id && 
+                       rtrim($item_click->clicked_url, '/') == rtrim($url, '/');
+            })->count();
+
+            $linksPerformance->push([
+                'title' => $item['name'] ?? $item['title'] ?? $block->title,
                 'url' => $url,
-                // ถ้ายอดคลิกไม่มีใน Analytics ให้ใส่ 0 เข้าไปเลย
-                'clicks' => $blockClicks[$block->id] ?? 0 
-            ];
-        })
-        ->sortByDesc('clicks') // เรียงจากคลิกมากสุดไปน้อยสุด
-        ->values() // รีเซ็ต index ของอาร์เรย์ใหม่
-        ->toArray();
+                'icon' => $item['icon'] ?? $block->icon ?? 'Link', // ห้ามปรับ
+                'clicks' => $clicks
+            ]);
+        }
+    } else { 
+        // 🛠️ ลอจิกแกะ URL แบบปลอดภัยสูงสุด (รองรับทั้งแบบ Object ปกติ และแบบ Array ชั้นเดียว)
+        $url = '';
+        if (is_array($contentData)) {
+            if (isset($contentData['url'])) {
+                $url = trim($contentData['url']);
+            } elseif (isset($contentData['link'])) {
+                $url = trim($contentData['link']);
+            } elseif (count($contentData) > 0) {
+                $url = trim($contentData[0]['url'] ?? $contentData[0]['link'] ?? '');
+            }
+        }
+        
+        // ถ้าแกะทุกทางแล้วยังว่างอยู่จริงๆ ค่อยข้าม
+        if (empty($url)) continue;
+        
+        // 🛠️ ป้องกันเรื่อง Type ของ ID เพี้ยน ด้วยการแปลงเป็น String/Integer ให้ตรงกันก่อนดึงค่า
+        $blockKey = $block->id;
+        $clicks = 0;
+        
+        if ($blockClicks->has($blockKey)) {
+            $clicks = $blockClicks->get($blockKey);
+        } elseif ($blockClicks->has((string)$blockKey)) {
+            $clicks = $blockClicks->get((string)$blockKey);
+        } elseif ($blockClicks->has((int)$blockKey)) {
+            $clicks = $blockClicks->get((int)$blockKey);
+        }
+
+        $linksPerformance->push([
+            'id' => $block->id,
+            'title' => $block->title ?: 'ไม่มีชื่อลิงก์',
+            'url' => $url,
+            'icon' => $block->icon ?? 'Link', // ห้ามปรับ
+            'clicks' => $clicks
+        ]);
+    }
+} // ปิด foreach
+        // เรียงลำดับจากคลิกเยอะสุดไปน้อยสุด และตัดตัวที่คลิกเป็น 0 ออก (ถ้าต้องการ)
+        $linksPerformance = $linksPerformance->sortByDesc('clicks')
+                                             ->values()
+                                             ->toArray();
 
         // =========================================================
 
+        // คืนค่า Return ออกไปที่เดียวตอนจบฟังก์ชัน
         return response()->json([
             'success' => true,
             'data' => [
