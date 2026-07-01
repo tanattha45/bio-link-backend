@@ -79,4 +79,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/admin/{id}', [AdminController::class, 'deleteUser']);
 
     Route::get('/admin/dashboard-stats', [AdminDashboardController::class, 'getDashboardStats']);
+
+    Route::post('/admin/remind-single/{id}', [AdminDashboardController::class, 'sendReminderSingle']);
+    Route::post('/admin/remind-bulk', [AdminDashboardController::class, 'sendReminderBulk']);
 });
