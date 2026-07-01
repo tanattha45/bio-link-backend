@@ -64,4 +64,17 @@ class User extends Authenticatable
     {
         return $this->hasOne(Profile::class);
     }
+
+    protected static function booted()
+    {
+        // ทำงานอัตโนมัติเมื่อมีการ Insert ข้อมูลลงตาราง users สำเร็จ
+        static::created(function ($user) {
+            $user->profile()->create([
+                'username' => $user->username,
+                'display_name' => $user->display_name,
+                'show_save_contact' => 1,
+                // ค่าอื่นๆ ปล่อยว่างไว้ให้เป็น null หรือค่า default ตาม Database
+            ]);
+        });
+    }
 }
