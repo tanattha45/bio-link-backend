@@ -140,21 +140,31 @@ class ProfileController extends Controller
 
             $existingColumns = \Illuminate\Support\Facades\Schema::getColumnListing('profiles');
 
+            
+            // ดักแปลงค่า true/false จาก React ให้เป็นตัวเลข 1/0 ชัวร์ๆ ก่อนเซฟ
+            $rawShowSave = $request->input('showSaveContact', $request->input('show_save_contact', 1));
+            $showSaveContact = filter_var($rawShowSave, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
+
             $incomingData = [
                 'user_id'           => $user->id,
                 'username'          => $newUsername, 
-                'display_name'      => $request->input('display_name'),
+                'display_name'      => $request->input('display_name', $request->input('name')), // รับชื่อโปรไฟล์หลัก
                 'bio'               => $request->input('bio'),
                 'avatar_url'        => $avatarUrl, 
                 'cover_url'         => $coverUrl,
                 'bg_image_url'      => $bgImageUrl,
-                'contact_name'      => $request->input('contact_name'),
-                'contact_phone'     => $request->input('contact_phone'),
-                'contact_email'     => $request->input('contact_email'),
-                'contact_company'   => $request->input('contact_company'),
-                'contact_job_title' => $request->input('contact_job_title'),
-                'contact_website'   => $request->input('contact_website'),
-                'show_save_contact' => $request->input('show_save_contact', 1),
+                
+                // เอา $request->input('name') ออกจาก contact_name เพื่อไม่ให้ค่าชนกัน
+                'contact_name'      => $request->input('contactName', $request->input('contact_name')),
+                'contact_phone'     => $request->input('phone', $request->input('contact_phone')),
+                'contact_email'     => $request->input('email', $request->input('contact_email')),
+                'contact_company'   => $request->input('company', $request->input('contact_company')),
+                'contact_job_title' => $request->input('title', $request->input('contact_job_title')),
+                'contact_website'   => $request->input('website', $request->input('contact_website')),
+                
+                // ใช้ค่าที่เราแปลงเป็น 1/0 แล้ว
+                'show_save_contact' => $showSaveContact,
+                
                 'theme_config'      => $request->input('theme_config'),
             ];
 
