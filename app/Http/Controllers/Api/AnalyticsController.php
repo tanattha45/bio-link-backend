@@ -205,96 +205,93 @@ class AnalyticsController extends Controller
         }
 
 // =========================================================
-// ⭐️ ประสิทธิภาพลิงก์ (เวอร์ชันเสถียรสูงสุด - แก้ไขเรื่อง Type ID และการแกะ URL)
-// =========================================================
+        // 🌟 3. ประสิทธิภาพลิงก์ (แก้ใหม่ให้จับคู่แม่นยำ 100% + เพิ่มรูป/ไอคอน)
+        // =========================================================
+        
+        $blocks = Block::where('profile_id', $profile->id)->get();
+        
+        // ดึงยอดคลิกมาทั้งหมดแบบดิบๆ ก่อน
+        $allClicks = Analytic::where('profile_id', $profile->id)
+            ->whereNotNull('block_id')
+            ->where('block_id', '!=', 999999)
+            ->whereBetween('created_at', [$startDate, $endDate])
+            ->get();
 
-$blocks = Block::where('profile_id', $profile->id)->get();
-    
-// ดึงยอดคลิกกรุปรวมแยกตาม block_id
-$blockClicks = Analytic::where('profile_id', $profile->id)
-    ->whereNotNull('block_id')
-    ->where('block_id', '!=', 999999)
-    ->whereBetween('created_at', [$startDate, $endDate])
-    ->select('block_id', DB::raw('count(*) as total'))
-    ->groupBy('block_id')
-    ->pluck('total', 'block_id');
+        $linksPerformance = collect();
 
-// ดึงรายละเอียดตัว Analytic เผื่อไว้ใช้สำหรับกลุ่มบล็อกย่อย (Slider/Shop)
-$allClicksDetail = Analytic::where('profile_id', $profile->id)
-    ->whereNotNull('block_id')
-    ->where('block_id', '!=', 999999)
-    ->whereBetween('created_at', [$startDate, $endDate])
-    ->get();
+        // 🌟 ฟังก์ชันทำความสะอาด URL ฝั่งหลังบ้าน (พระเอกของงานนี้)
+        $cleanUrl = function($u) {
+            if (empty($u)) return '';
+            // ตัด https://, http://, www. และ / ตัวท้ายสุดออกให้หมด
+            $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
+            $u = preg_replace('#^www\.#', '', $u);
+            return strtolower(trim($u));
+        };
 
-$linksPerformance = collect();
+        foreach ($blocks as $block) {
+            $contentData = is_string($block->content_data) ? json_decode($block->content_data, true) : $block->content_data;
 
-foreach ($blocks as $block) {
-    $contentData = is_string($block->content_data) ? json_decode($block->content_data, true) : $block->content_data;
+            // 🌟 3.1 บล็อกกล่องกลุ่ม (SHOP, SLIDER) ให้แยกเป็นรายชิ้น
+            if (in_array(strtoupper($block->type), ['SHOP', 'SLIDER']) && is_array($contentData)) {
+                foreach ($contentData as $item) {
+                    $url = trim($item['url'] ?? $item['link'] ?? '');
+                    if (empty($url)) continue; // ข้ามลิงก์ว่าง
 
-    // ตรวจสอบว่าเป็น Array แบบหลายลิงก์ย่อย (เช่น Slider/Shop) 
-    if (is_array($contentData) && isset($contentData[0]) && is_array($contentData[0])) {
-        foreach ($contentData as $item) {
-            $url = trim($item['url'] ?? $item['link'] ?? '');
-            if (empty($url)) continue;
+                    // นับยอดคลิก โดยแปลงให้เป็น String ทั้งคู่ และเทียบ URL แบบสะอาด
+                    $clicks = $allClicks->filter(function($click) use ($block, $url, $cleanUrl) {
+                        $idMatch = (string)$click->block_id === (string)$block->id;
+                        $urlMatch = $cleanUrl($click->clicked_url) === $cleanUrl($url);
+                        return $idMatch && $urlMatch;
+                    })->count();
 
-            // คัดกรองนับจำนวนคลิกของลิงก์ย่อย
-            $clicks = $allClicksDetail->filter(function($item_click) use ($block, $url) {
-                return $item_click->block_id == $block->id && 
-                       rtrim($item_click->clicked_url, '/') == rtrim($url, '/');
-            })->count();
+                    $linksPerformance->push([
+                        'id' => $block->id,
+                        'title' => $item['name'] ?? $item['title'] ?? $block->title ?? 'ไม่มีชื่อลิงก์',
+                        'url' => $url,
+                        // 🌟 ดึงรูปภาพและไอคอน เพื่อให้ Slider โชว์รูปได้เหมือน Shop
+                        'image' => $item['image'] ?? $item['imageUrl'] ?? null,
+                        'icon' => $item['icon'] ?? $item['iconId'] ?? $block->icon ?? 'Link',
+                        'clicks' => $clicks
+                    ]);
+                }
+            } 
+            // 🌟 3.2 บล็อกเดี่ยว (LINK, VIDEO, IMAGE ฯลฯ)
+            else {
+                $url = '';
+                $icon = $block->icon ?? 'Link';
+                $image = $block->image ?? null;
 
-            $linksPerformance->push([
-                'title' => $item['name'] ?? $item['title'] ?? $block->title,
-                'url' => $url,
-                'icon' => $item['icon'] ?? $block->icon ?? 'Link', // ห้ามปรับ
-                'clicks' => $clicks
-            ]);
-        }
-    } else { 
-        // 🛠️ ลอจิกแกะ URL แบบปลอดภัยสูงสุด (รองรับทั้งแบบ Object ปกติ และแบบ Array ชั้นเดียว)
-        $url = '';
-        if (is_array($contentData)) {
-            if (isset($contentData['url'])) {
-                $url = trim($contentData['url']);
-            } elseif (isset($contentData['link'])) {
-                $url = trim($contentData['link']);
-            } elseif (count($contentData) > 0) {
-                $url = trim($contentData[0]['url'] ?? $contentData[0]['link'] ?? '');
+                if (is_array($contentData) && count($contentData) > 0) {
+                    $url = trim($contentData[0]['url'] ?? $contentData[0]['link'] ?? '');
+                    // ดักจับไอคอนและรูปภาพที่ซ่อนอยู่ใน contentData
+                    $icon = $contentData[0]['icon'] ?? $contentData[0]['iconId'] ?? $icon;
+                    $image = $contentData[0]['image'] ?? $contentData[0]['imageUrl'] ?? $image;
+                }
+                
+                if (empty($url)) continue; // ข้ามลิงก์ว่าง
+
+                // นับรวมคลิกของบล็อกเดี่ยว แปลงเป็น String ป้องกัน Type Mismatch
+                $clicks = $allClicks->filter(function($click) use ($block) {
+                    return (string)$click->block_id === (string)$block->id;
+                })->count();
+
+                $linksPerformance->push([
+                    'id' => $block->id,
+                    'title' => $block->title ?: 'ไม่มีชื่อลิงก์',
+                    'url' => $url,
+                    // 🌟 ส่งค่าไอคอนและรูปลิงก์เดี่ยวไปให้หน้าบ้านด้วย
+                    'image' => $image,
+                    'icon' => $icon,
+                    'clicks' => $clicks
+                ]);
             }
         }
-        
-        // ถ้าแกะทุกทางแล้วยังว่างอยู่จริงๆ ค่อยข้าม
-        if (empty($url)) continue;
-        
-        // 🛠️ ป้องกันเรื่อง Type ของ ID เพี้ยน ด้วยการแปลงเป็น String/Integer ให้ตรงกันก่อนดึงค่า
-        $blockKey = $block->id;
-        $clicks = 0;
-        
-        if ($blockClicks->has($blockKey)) {
-            $clicks = $blockClicks->get($blockKey);
-        } elseif ($blockClicks->has((string)$blockKey)) {
-            $clicks = $blockClicks->get((string)$blockKey);
-        } elseif ($blockClicks->has((int)$blockKey)) {
-            $clicks = $blockClicks->get((int)$blockKey);
-        }
 
-        $linksPerformance->push([
-            'id' => $block->id,
-            'title' => $block->title ?: 'ไม่มีชื่อลิงก์',
-            'url' => $url,
-            'icon' => $block->icon ?? 'Link', // ห้ามปรับ
-            'clicks' => $clicks
-        ]);
-    }
-} // ปิด foreach
-        // เรียงลำดับจากคลิกเยอะสุดไปน้อยสุด และตัดตัวที่คลิกเป็น 0 ออก (ถ้าต้องการ)
-        $linksPerformance = $linksPerformance->sortByDesc('clicks')
-                                             ->values()
-                                             ->toArray();
+        // เรียงลำดับจากคลิกมากสุดไปน้อยสุด แล้วแปลงกลับเป็น Array
+        $linksPerformance = $linksPerformance->sortByDesc('clicks')->values()->toArray();
 
         // =========================================================
 
-        // คืนค่า Return ออกไปที่เดียวตอนจบฟังก์ชัน
         return response()->json([
             'success' => true,
             'data' => [
@@ -302,7 +299,7 @@ foreach ($blocks as $block) {
                 'total_clicks' => $totalClicks,
                 'total_saves'  => $totalSaves,
                 'ctr'          => $ctr,
-                'trend'        => $trend, // ⭐️ ส่งก้อน Trend กลับไปให้หน้าบ้าน
+                'trend'        => $trend,
                 'chart_data'   => $chartData,
                 'links'        => $linksPerformance, 
             ]
