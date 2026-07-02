@@ -9,7 +9,7 @@ use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
-class InactiveUserReminder extends Mailable implements ShouldQueue 
+class ActiveTrafficReminder extends Mailable implements ShouldQueue 
 {
     use Queueable, SerializesModels;
 
@@ -23,14 +23,14 @@ class InactiveUserReminder extends Mailable implements ShouldQueue
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'โปรไฟล์ของคุณเงียบเหงาไปนิด กลับมาอัปเดตลิงก์ใหม่ๆ กันไหม? ',
+            subject: 'ข่าวดี! โปรไฟล์ของคุณยังมีคนเข้าชมอยู่นะ',
         );
     }
 
     public function content(): Content
     {
         return new Content(
-            view: 'emails.users.inactive-reminder',
+            view: 'emails.users.active-traffic-reminder',
         );
     }
 }

@@ -7,46 +7,82 @@ use App\Models\User; // Model ของตาราง users
 use Carbon\Carbon; // จัดการวันเวลา
 use Illuminate\Support\Facades\DB; // คิวรี่ดาต้าเบสโดยตรง
 use Illuminate\Support\Facades\Mail; 
+
 use App\Mail\InactiveUserReminder;   
+use App\Mail\ActiveTrafficReminder;
+use App\Mail\NoLinkReminder;   
+
 
 class AdminDashboardController extends Controller
 {
-    // 1. ฟังก์ชันส่งรายคน
+
+    // 1. ฟังก์ชันส่งรายคน 
     public function sendReminderSingle($id)
     {
         $user = User::findOrFail($id);
-        Mail::to($user->email)->send(new InactiveUserReminder($user));
-        return response()->json(['message' => 'เพิ่มคำสั่งส่งอีเมลลงคิวสำเร็จ']);
+        
+        // เรียกใช้ฟังก์ชันตัวช่วยด้านล่าง เพื่อส่งอีเมลตามเงื่อนไข
+        $this->determineAndSendEmail($user);
+        
+        return response()->json(['message' => 'ส่งอีเมลแจ้งเตือนสำเร็จ']);
     }
 
-    // 2. ฟังก์ชันส่งทั้งหมด
+    // 2. ฟังก์ชันส่งทั้งหมด 
     public function sendReminderBulk(Request $request)
     {
-        $days = $request->input('days', 30);
-        $thresholdDate = now()->subDays((int)$days);
-        $thresholdTimestamp = $thresholdDate->timestamp;
+        // รับ array ของ user_ids จากหน้า Frontend ที่เราออกแบบไว้
+        $userIds = $request->input('user_ids', []);
 
-        // ดึงเฉพาะ User ที่ไม่มีความเคลื่อนไหวในตาราง sessions เกิน X วัน หรือไม่มีเซสชันและสมัครมานานแล้ว
-        User::where(function ($query) use ($thresholdTimestamp, $thresholdDate) {
-                $query->whereHas('sessions', function ($q) use ($thresholdTimestamp) {
-                    // มีเซสชัน แต่ล็อกอินล่าสุดเก่ากว่าวันที่กำหนด
-                    $q->where('last_activity', '<', $thresholdTimestamp);
-                })
-                ->orWhere(function ($q) use ($thresholdDate) {
-                    // ไม่มีเซสชันเลย และสมัครสมาชิกมานานกว่าวันที่กำหนดแล้ว
-                    $q->doesntHave('sessions')
-                      ->where('created_at', '<', $thresholdDate);
-                });
-            })
-            ->chunk(100, function ($users) {
-                foreach ($users as $user) {
-                    Mail::to($user->email)->send(new InactiveUserReminder($user));
-                }
-            });
+        if (empty($userIds)) {
+            return response()->json(['status' => 'error', 'message' => 'ไม่มีผู้ใช้ที่เลือก'], 400);
+        }
 
-        return response()->json(['message' => 'เพิ่มคำสั่งส่งอีเมลกลุ่มลงคิวสำเร็จ']);
+        $users = User::whereIn('id', $userIds)->get();
+        
+        foreach ($users as $user) {
+            // เรียกใช้ฟังก์ชันตัวช่วยด้านล่าง
+            $this->determineAndSendEmail($user);
+        }
+
+        return response()->json(['message' => 'ส่งอีเมลกลุ่มสำเร็จ']);
     }
 
+
+    // สำหรับแยกกลุ่มส่งอีเมล
+    private function determineAndSendEmail(User $user)
+    {
+        try {
+            // 1. เช็คจำนวนลิงก์ (Blocks)
+            $linksCount = DB::table('blocks')
+                ->join('profiles', 'profiles.id', '=', 'blocks.profile_id')
+                ->where('profiles.user_id', $user->id)
+                ->count();
+
+            if ($linksCount === 0) {
+                // กลุ่ม 1: สมัครแล้วยังไม่ตั้งค่า (เอาคอมเมนต์ออกเมื่อสร้างไฟล์ Mail แล้ว)
+                Mail::to($user->email)->queue(new NoLinkReminder($user));
+            } else {
+                // 2. เช็ค Traffic ล่าสุด
+                $lastTrafficDate = DB::table('analytics')
+                    ->join('profiles', 'profiles.id', '=', 'analytics.profile_id')
+                    ->where('profiles.user_id', $user->id)
+                    ->max('analytics.created_at');
+
+                $hasRecentTraffic = $lastTrafficDate && Carbon::parse($lastTrafficDate)->greaterThanOrEqualTo(now()->subDays(7));
+
+                if ($hasRecentTraffic) {
+                    // กลุ่ม 2: ลิงก์ยังทำงานอยู่ (มี Traffic ใน 7 วัน)
+                    Mail::to($user->email)->queue(new ActiveTrafficReminder($user));
+                } else {
+                    // กลุ่ม 3: ไม่มีความเคลื่อนไหวเลย
+                    Mail::to($user->email)->queue(new InactiveUserReminder($user));
+                }
+            }
+        } catch (\Exception $e) {
+            // หากส่งอีเมลล้มเหลว (เช่น อีเมลปลอม) ให้ข้ามไปคนต่อไป
+            \Illuminate\Support\Facades\Log::error("ส่งอีเมลพลาด User ID {$user->id}: " . $e->getMessage());
+        }
+    }
     // พนักงานรับออเดอร์ (Public Function)
     // ถ้า frontend เรียก API (GET.......) laravel จะมาเข้าฟังก์ชั่นนี้
     public function getDashboardStats(Request $request)
@@ -128,11 +164,11 @@ class AdminDashboardController extends Controller
         // $prevStart, $prevEnd = ใช้ดึงข้อมูลย้อนหลังมาเทียบ เพื่อคำนวณ % เพิ่มขึ้นหรือลดลง
         // $start, $end = ใช้ดึงข้อมูลที่จะแสดงให้ Admin เห็น
         $currentBlocks = DB::table('blocks')
-            ->where('created_at', '<=', $end)
+            ->whereBetween('created_at', [$start, $end])
             ->sum(DB::raw('COALESCE(JSON_LENGTH(content_data), 0)')) ?? 0;
 
         $prevBlocks = DB::table('blocks')
-            ->where('created_at', '<=', $prevEnd)
+            ->whereBetween('created_at', [$prevStart, $prevEnd])
             ->sum(DB::raw('COALESCE(JSON_LENGTH(content_data), 0)')) ?? 0;
 
         // 6. ดึงข้อมูล "ยอดคลิกรวม" (ไม่นับ Save Contact)
@@ -399,7 +435,7 @@ class AdminDashboardController extends Controller
 
         $users = User::select('users.id', 'users.display_name', 'users.username', 'users.created_at')
             ->selectSub(function ($query) {
-                $query->selectRaw('MAX(last_activity)')
+                $query->selectRaw('MAX(last_activity)') // เวลาที่ผู้ใช้ล็อกอินหรือใช้งานระบบล่าสุด
                       ->from('sessions')
                       ->whereColumn('sessions.user_id', 'users.id');
             }, 'last_active_ts')
@@ -409,6 +445,12 @@ class AdminDashboardController extends Controller
                       ->join('profiles', 'profiles.id', '=', 'blocks.profile_id')
                       ->whereColumn('profiles.user_id', 'users.id');
             }, 'total_links_count')
+            ->selectSub(function ($query) {
+                $query->selectRaw('MAX(analytics.created_at)')
+                      ->from('analytics')
+                      ->join('profiles', 'profiles.id', '=', 'analytics.profile_id') 
+                      ->whereColumn('profiles.user_id', 'users.id');
+            }, 'last_link_activity_at')
             ->get();
 
         return $users->filter(function ($user) use ($thresholdTimestamp, $thresholdDate) {
@@ -420,7 +462,7 @@ class AdminDashboardController extends Controller
             $createdAt = Carbon::parse($user->created_at);
             return $createdAt->lessThan($thresholdDate);
             
-        // 💡 เพิ่มการ use ($minDays) เข้าไปใน map เพื่อเอาค่าวันไปคำนวณสถานะ
+        // เพิ่มการ use ($minDays) เข้าไปใน map เพื่อเอาค่าวันไปคำนวณสถานะ
         })->map(function ($user) use ($minDays) { 
             
             $createdAt = $user->created_at ? Carbon::parse($user->created_at) : now();
@@ -431,20 +473,26 @@ class AdminDashboardController extends Controller
                 
             $daysInactive = (int) $lastActiveDate->diffInDays(now());
 
+            $lastLinkActivity = $user->last_link_activity_at ? Carbon::parse($user->last_link_activity_at) : null;
+
             // ค่า Default สีแดง
             $status = 'ไม่มีความเคลื่อนไหว';
             $statusColor = 'bg-red-500';
             
             if ((int)$user->total_links_count === 0) {
-                // ถ้าไม่มีลิงก์ ให้เป็นสีเหลือง
-                $status = 'สมัครแล้วยังไม่ตั้งค่า';
-                $statusColor = 'bg-yellow-500';
-                
-            // 💡 ปรับเงื่อนไขสีส้ม: ให้แปรผันตามช่วงเวลา (เช่น ถ้าเลือก 7 วัน สีส้มคือช่วง 7-14 วัน)
-            } elseif ($daysInactive >= $minDays && $daysInactive <= ($minDays + 7)) {
-                $status = 'เสี่ยงต่อการเลิกใช้งาน';
-                $statusColor = 'bg-orange-500';
-            }
+            $status = 'สมัครแล้วยังไม่ตั้งค่า';
+            $statusColor = 'bg-yellow-500';
+            
+        } else if ($lastLinkActivity && $lastLinkActivity->greaterThanOrEqualTo(now()->subDays(7))) {
+            // โจทก์ของเรา: ไม่ล็อกอินนานแล้ว แต่ลิงก์ยังมีคนโต้ตอบภายใน 7 วันที่ผ่านมา
+            $status = 'ลิงก์ยังทำงานอยู่';
+            $statusColor = 'bg-blue-500'; // เปลี่ยนเป็นสีฟ้าเพื่อสะท้อนสถานะ Active ทางอ้อม
+            
+        } else {
+            // ไม่ล็อกอินด้วย และลิงก์ก็ไม่มีคนคลิก/ดูเลยเกิน 7 วัน
+            $status = 'ไม่มีความเคลื่อนไหว';
+            $statusColor = 'bg-red-500';
+        }
 
             $colors = ['bg-red-500', 'bg-green-500', 'bg-slate-400', 'bg-blue-500', 'bg-purple-500'];
             $iconColor = $colors[$user->id % count($colors)];
@@ -456,6 +504,8 @@ class AdminDashboardController extends Controller
                 'links' => (int)$user->total_links_count,
                 'date' => $lastActiveDate->translatedFormat('d M Y'), 
                 'daysAgo' => $daysInactive . ' วันที่แล้ว',
+                'lastLinkActivity' => $lastLinkActivity ? $lastLinkActivity->translatedFormat('d M Y') : 'ไม่มีข้อมูลการใช้งาน',
+                'hasTraffic' => $status === 'ลิงก์ยังทำงานอยู่', // flag ให้ front เช็คสำหรับแยกกลุ่มส่งเมลได้ง่ายขึ้น
                 'status' => $status,
                 'statusColor' => $statusColor,
             ];
