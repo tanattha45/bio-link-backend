@@ -24,39 +24,24 @@ class AnalyticsController extends Controller
 
             $sessionId = $request->input('session_id');
             $blockId = $request->input('block_id');
+            // 🌟 รับค่า URL ที่ถูกคลิกจากหน้าบ้าน
+            $clickedUrl = $request->input('clicked_url'); 
+            
             $ipAddress = $request->ip();
-
-            // เข้ารหัส IP แล้วตัดความยาวให้เหลือแค่ 45 ตัวอักษร (ป้องกัน DB ล้น)
             $hashedIp = $ipAddress ? substr(hash('sha256', $ipAddress), 0, 45) : null;
-
-            // ตัดความยาว URL ของ referrer ไม่ให้เกิน 255 ตัวอักษร
+            
             $referrer = $request->input('referrer_url');
             $safeReferrer = $referrer ? substr($referrer, 0, 255) : null;
 
-            // ⭐️ ปิดการทำงานระบบดักจับ Anti-Spam ชั่วคราวเพื่อให้เทสได้ง่าย
-            /*
-            $recentRecord = Analytic::where('profile_id', $profile->id)
-                ->where('session_id', $sessionId)
-                ->where('block_id', $blockId)
-                ->where('created_at', '>=', Carbon::now()->subMinutes(30))
-                ->first();
-
-            if (!$recentRecord) {
-            */
-            
-                // บันทึกข้อมูลลงฐานข้อมูลทุกครั้งที่มีการกดคลิกทันที
-                Analytic::create([
-                    'profile_id' => $profile->id,
-                    'block_id'   => $blockId,
-                    'session_id' => $sessionId,
-                    'ip_address' => $hashedIp,
-                    'user_agent' => $request->header('User-Agent'),
-                    'referrer_url' => $safeReferrer,
-                ]);
-
-            /*
-            }
-            */
+            Analytic::create([
+                'profile_id' => $profile->id,
+                'block_id'   => $blockId,
+                'clicked_url'=> $clickedUrl, // 🌟 บันทึกลงฐานข้อมูล
+                'session_id' => $sessionId,
+                'ip_address' => $hashedIp,
+                'user_agent' => $request->header('User-Agent'),
+                'referrer_url' => $safeReferrer,
+            ]);
 
             return response()->json(['success' => true]);
 
@@ -219,44 +204,91 @@ class AnalyticsController extends Controller
             ];
         }
 
-        // =========================================================
-        // ⭐️ ประสิทธิภาพลิงก์ (กรองตามวันที่)
+// =========================================================
+        // 🌟 3. ประสิทธิภาพลิงก์ (แก้ใหม่ให้จับคู่แม่นยำ 100% + เพิ่มรูป/ไอคอน)
         // =========================================================
         
-        // ดึงบล็อกทั้งหมดของโปรไฟล์นี้มา
         $blocks = Block::where('profile_id', $profile->id)->get();
         
-        // นับยอดคลิกแยกรหัสบล็อก (ดึงจาก Analytic และกรองตามวันที่)
-        $blockClicks = Analytic::where('profile_id', $profile->id)
+        // ดึงยอดคลิกมาทั้งหมดแบบดิบๆ ก่อน
+        $allClicks = Analytic::where('profile_id', $profile->id)
             ->whereNotNull('block_id')
             ->where('block_id', '!=', 999999)
-            ->whereBetween('created_at', [$startDate, $endDate]) // ⭐️ เพิ่มตัวกรองตรงนี้
-            ->select('block_id', DB::raw('count(*) as total'))
-            ->groupBy('block_id')
-            ->pluck('total', 'block_id');
+            ->whereBetween('created_at', [$startDate, $endDate])
+            ->get();
 
-        // เอาข้อมูลบล็อกมารวมกับยอดคลิก
-        $linksPerformance = $blocks->map(function ($block) use ($blockClicks) {
-            // ถอดรหัส JSON ของ content_data ถ้าจำเป็น
+        $linksPerformance = collect();
+
+        // 🌟 ฟังก์ชันทำความสะอาด URL ฝั่งหลังบ้าน (พระเอกของงานนี้)
+        $cleanUrl = function($u) {
+            if (empty($u)) return '';
+            // ตัด https://, http://, www. และ / ตัวท้ายสุดออกให้หมด
+            $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
+            $u = preg_replace('#^www\.#', '', $u);
+            return strtolower(trim($u));
+        };
+
+        foreach ($blocks as $block) {
             $contentData = is_string($block->content_data) ? json_decode($block->content_data, true) : $block->content_data;
-            
-            // พยายามหา URL มาโชว์ (ดึงจาก item แรก)
-            $url = '';
-            if (is_array($contentData) && count($contentData) > 0) {
-                $url = $contentData[0]['url'] ?? $contentData[0]['link'] ?? '';
-            }
 
-            return [
-                'id' => $block->id,
-                'title' => $block->title ?: 'ไม่มีชื่อลิงก์',
-                'url' => $url,
-                // ถ้ายอดคลิกไม่มีใน Analytics ให้ใส่ 0 เข้าไปเลย
-                'clicks' => $blockClicks[$block->id] ?? 0 
-            ];
-        })
-        ->sortByDesc('clicks') // เรียงจากคลิกมากสุดไปน้อยสุด
-        ->values() // รีเซ็ต index ของอาร์เรย์ใหม่
-        ->toArray();
+            // 🌟 3.1 บล็อกกล่องกลุ่ม (SHOP, SLIDER) ให้แยกเป็นรายชิ้น
+            if (in_array(strtoupper($block->type), ['SHOP', 'SLIDER']) && is_array($contentData)) {
+                foreach ($contentData as $item) {
+                    $url = trim($item['url'] ?? $item['link'] ?? '');
+                    if (empty($url)) continue; // ข้ามลิงก์ว่าง
+
+                    // นับยอดคลิก โดยแปลงให้เป็น String ทั้งคู่ และเทียบ URL แบบสะอาด
+                    $clicks = $allClicks->filter(function($click) use ($block, $url, $cleanUrl) {
+                        $idMatch = (string)$click->block_id === (string)$block->id;
+                        $urlMatch = $cleanUrl($click->clicked_url) === $cleanUrl($url);
+                        return $idMatch && $urlMatch;
+                    })->count();
+
+                    $linksPerformance->push([
+                        'id' => $block->id,
+                        'title' => $item['name'] ?? $item['title'] ?? $block->title ?? 'ไม่มีชื่อลิงก์',
+                        'url' => $url,
+                        // 🌟 ดึงรูปภาพและไอคอน เพื่อให้ Slider โชว์รูปได้เหมือน Shop
+                        'image' => $item['image'] ?? $item['imageUrl'] ?? null,
+                        'icon' => $item['icon'] ?? $item['iconId'] ?? $block->icon ?? 'Link',
+                        'clicks' => $clicks
+                    ]);
+                }
+            } 
+            // 🌟 3.2 บล็อกเดี่ยว (LINK, VIDEO, IMAGE ฯลฯ)
+            else {
+                $url = '';
+                $icon = $block->icon ?? 'Link';
+                $image = $block->image ?? null;
+
+                if (is_array($contentData) && count($contentData) > 0) {
+                    $url = trim($contentData[0]['url'] ?? $contentData[0]['link'] ?? '');
+                    // ดักจับไอคอนและรูปภาพที่ซ่อนอยู่ใน contentData
+                    $icon = $contentData[0]['icon'] ?? $contentData[0]['iconId'] ?? $icon;
+                    $image = $contentData[0]['image'] ?? $contentData[0]['imageUrl'] ?? $image;
+                }
+                
+                if (empty($url)) continue; // ข้ามลิงก์ว่าง
+
+                // นับรวมคลิกของบล็อกเดี่ยว แปลงเป็น String ป้องกัน Type Mismatch
+                $clicks = $allClicks->filter(function($click) use ($block) {
+                    return (string)$click->block_id === (string)$block->id;
+                })->count();
+
+                $linksPerformance->push([
+                    'id' => $block->id,
+                    'title' => $block->title ?: 'ไม่มีชื่อลิงก์',
+                    'url' => $url,
+                    // 🌟 ส่งค่าไอคอนและรูปลิงก์เดี่ยวไปให้หน้าบ้านด้วย
+                    'image' => $image,
+                    'icon' => $icon,
+                    'clicks' => $clicks
+                ]);
+            }
+        }
+
+        // เรียงลำดับจากคลิกมากสุดไปน้อยสุด แล้วแปลงกลับเป็น Array
+        $linksPerformance = $linksPerformance->sortByDesc('clicks')->values()->toArray();
 
         // =========================================================
 
@@ -267,7 +299,7 @@ class AnalyticsController extends Controller
                 'total_clicks' => $totalClicks,
                 'total_saves'  => $totalSaves,
                 'ctr'          => $ctr,
-                'trend'        => $trend, // ⭐️ ส่งก้อน Trend กลับไปให้หน้าบ้าน
+                'trend'        => $trend,
                 'chart_data'   => $chartData,
                 'links'        => $linksPerformance, 
             ]
