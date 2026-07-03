@@ -68,6 +68,7 @@ Route::middleware('auth:sanctum')->group(function () {
     
     // --- Analytics ---
     Route::get('/user/analytics', [AnalyticsController::class, 'getDashboardStats']);
+    Route::get('/analytics/export', [AnalyticsController::class, 'exportReport']);
 
     // Logout
     Route::post('/logout', [AuthController::class, 'logout']);

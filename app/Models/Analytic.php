@@ -13,6 +13,7 @@ class Analytic extends Model
         'profile_id',
         'block_id',
         'session_id',
+        'clicked_url',
         'ip_address',
         'user_agent',
         'referrer_url',
