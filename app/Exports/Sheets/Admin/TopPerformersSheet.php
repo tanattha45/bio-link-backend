@@ -56,11 +56,9 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
             
             // 2. คำนวณ Growth 
             $growth = 0;
-            if ($prevViews == 0 && $views == 0) {
-                $growth = 0;
-            } elseif ($prevViews == 0) {
+            if ($prevViews == 0 && $views > 0) {
                 $growth = 100;
-            } else {
+            } elseif ($prevViews > 0) {
                 $growth = round((($views - $prevViews) / $prevViews) * 100, 1);
             }
             $growthFormatted = ($growth > 0 ? '+' : '') . $growth . '%';
@@ -70,36 +68,74 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
             $growthBonus = min($growth, 50) * 0.01; 
             $finalScore = round($baseScore * (1 + $growthBonus), 2);
 
-            // 4. ระบบค้นหา Popular Link ของเพจนี้
-            $popularBlock = DB::table('analytics')
-                ->select('block_id', DB::raw('COUNT(*) as click_count'))
+            // =========================================================
+            // 🌟 4. ระบบค้นหา Popular Link (เจาะลึกถึงลิงก์ย่อย เหมือนใน Controller)
+            // =========================================================
+            
+            // ดึงรายการคลิกทั้งหมดของโปรไฟล์นี้ (เพื่อเอา clicked_url มาเทียบ)
+            $allClicks = DB::table('analytics')
                 ->where('profile_id', $page->id)
                 ->whereNotNull('block_id')
                 ->where('block_id', '!=', 999999)
                 ->whereBetween('created_at', [$this->start, $this->end])
-                ->groupBy('block_id')
-                ->orderBy('click_count', 'desc')
-                ->first();
+                ->get();
+
+            // ฟังก์ชันทำความสะอาด URL
+            $cleanUrl = function($u) {
+                if (empty($u)) return '';
+                $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
+                $u = preg_replace('#^www\.#', '', $u);
+                return strtolower(trim($u));
+            };
 
             $popularTitle = 'ยังไม่มีข้อมูลคลิก';
+            $popularUrl = '-';
             $popularClicks = 0;
 
-            if ($popularBlock) {
-                $block = DB::table('blocks')->where('id', $popularBlock->block_id)->first();
-                $popularTitle = 'ลิงก์ที่ไม่มีชื่อ';
-                
-                if ($block && $block->content_data) {
-                    $linksData = json_decode($block->content_data, true);
-                    if (is_array($linksData)) {
-                        foreach ($linksData as $linkItem) {
-                            if (isset($linkItem['id']) && $linkItem['id'] == $popularBlock->block_id) {
-                                $popularTitle = $linkItem['name'] ?? $linkItem['title'] ?? 'ลิงก์ไม่มีชื่อ';
-                                break;
-                            }
+            if ($allClicks->count() > 0) {
+                $blocks = DB::table('blocks')->where('profile_id', $page->id)->get();
+                $linksPerformance = collect();
+
+                foreach ($blocks as $block) {
+                    $contentData = is_string($block->content_data) ? json_decode($block->content_data, true) : $block->content_data;
+
+                    if (is_array($contentData)) {
+                        foreach ($contentData as $item) {
+                            $url = trim($item['url'] ?? $item['link'] ?? '');
+                            if (empty($url)) continue;
+
+                            // นับยอดคลิก
+                            $clicksCount = $allClicks->filter(function($click) use ($block, $url, $cleanUrl) {
+                                return (string)$click->block_id === (string)$block->id && 
+                                       $cleanUrl($click->clicked_url) === $cleanUrl($url);
+                            })->count();
+
+                            $linksPerformance->push([
+                                'title' => $item['name'] ?? $item['title'] ?? $block->title ?? 'ไม่มีชื่อลิงก์',
+                                'clicks' => $clicksCount,
+                                'url' => $url,
+                                'icon' => $item['icon'] ?? $item['iconId'] ?? $block->icon ?? 'Link',
+                                'type' => $block->type ?? ''
+                            ]);
                         }
                     }
                 }
-                $popularClicks = (int)$popularBlock->click_count;
+
+                // กรอง YouTube / TikTok และ VIDEO ออก เหมือนหน้าบ้าน
+                $filteredLinks = $linksPerformance->filter(function($link) {
+                    $iconStr = strtolower($link['icon'] ?? '');
+                    $typeStr = strtolower($link['type'] ?? '');
+                    return !($iconStr === 'youtube' || $iconStr === 'tiktok' || $typeStr === 'video');
+                });
+
+                // จัดอันดับลิงก์ที่ถูกคลิกเยอะที่สุดมา 1 อัน
+                $topLink = $filteredLinks->sortByDesc('clicks')->first();
+                
+                if ($topLink && $topLink['clicks'] > 0) {
+                    $popularTitle = $topLink['title'];
+                    $popularUrl = $topLink['url'];
+                    $popularClicks = $topLink['clicks'];
+                }
             }
 
             // แมปข้อมูลให้ตรงกับหัวคอลัมน์ใหม่
@@ -110,14 +146,13 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
                 'Clicks'                 => $clicks,
                 'CTR (%)'                => $ctr . '%',
                 'Saves'                  => $saves,
-                'Popular Link Title'     => $popularTitle,
-                'Popular Link Clicks'    => $popularClicks,
+                'Popular Link Title'     => $popularTitle,       // 🌟 อัปเดตให้เป็นชื่อที่ถูกต้อง
+                'Popular Link URL'       => $popularUrl,
+                'Popular Link Clicks'    => $popularClicks,      // 🌟 อัปเดตเป็นจำนวนคลิกที่คำนวณใหม่
                 'Performance Score'      => $finalScore,
-                // เก็บค่าคะแนนดิบไว้เรียงลำดับ (แต่จะไม่แสดงใน Excel เพราะเราจะตัดออกในขั้นตอนคืนค่า)
                 '_raw_score'             => $finalScore 
             ];
         })->sortByDesc('_raw_score')->map(function($item) {
-            // ตัดคอลัมน์ช่วยเรียงลำดับออกก่อนลงตาราง Excel
             unset($item['_raw_score']);
             return $item;
         });
@@ -133,6 +168,7 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
             'CTR (%)',
             'Saves',
             'Popular Link Title',
+            'Popular Link URL',
             'Popular Link Clicks',
             'Performance Score'
         ];

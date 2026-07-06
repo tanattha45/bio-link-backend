@@ -7,6 +7,8 @@ use Illuminate\Http\Request;
 use Maatwebsite\Excel\Facades\Excel;
 use App\Exports\OverviewExport;
 use Carbon\Carbon;
+use App\Exports\Sheets\Admin\UserManagementSheet;
+use Maatwebsite\Excel\Concerns\WithMultipleSheets;
 
 class ExportController extends Controller
 {
@@ -15,11 +17,10 @@ class ExportController extends Controller
         // 1. รับค่าจาก React Payload
         $timeRange = $request->input('timeRange');
         $customDate = $request->input('customDate');
-        // กำหนดค่าเริ่มต้นเป็น array ว่างป้องกัน error กรณีไม่ได้ติ๊กอะไรเลย
         $options = $request->input('downloadOptions', []); 
         $format = $request->input('fileFormat', 'excel'); 
 
-        // 2. คำนวณช่วงวันที่ (Start Date & End Date) และดัก Error กรณีลืมส่งวันที่
+        // 2. คำนวณช่วงวันที่ (Start Date & End Date)
         if ($timeRange === 'custom') {
             if (!$customDate || empty($customDate['start']) || empty($customDate['end'])) {
                 return response()->json(['message' => 'กรุณาระบุช่วงวันที่สำหรับกำหนดเอง'], 400);
@@ -37,12 +38,27 @@ class ExportController extends Controller
             }
         }
 
-        // 3. ตรวจสอบว่าผู้ใช้ติ๊กเลือกข้อมูลอย่างน้อย 1 อย่าง
+        // 3. เงื่อนไขสำหรับหน้า User Management (ติ๊กเลือก allUsers)
+        if (!empty($options['allUsers'])) {
+            $fileName = 'Users_Report_' . Carbon::now()->format('Ymd_His') . '.xlsx';
+            
+            // ใช้เทคนิคสร้างคลาส Multi-Sheet แบบด่วน (Inline) เพื่อห่อหุ้มคลาส Sheet เอาไว้ 
+            // ทำให้เราไม่ต้องสร้างไฟล์ Export ด้านนอก และคุมให้มีเฉพาะแท็บผู้ใช้งานแท็บเดียวโดดๆ ได้
+            return Excel::download(new class($startDate, $endDate) implements WithMultipleSheets {
+                private $start; private $end;
+                public function __construct($start, $end) { $this->start = $start; $this->end = $end; }
+                public function sheets(): array {
+                    return [
+                        new UserManagementSheet($this->start, $this->end)
+                    ];
+                }
+            }, $fileName);
+        }
+
+        // 4. เงื่อนไขเดิมสำหรับหน้า Dashboard (ติ๊กเลือกสถิติต่างๆ)
         if (!empty($options['overview']) || !empty($options['topProfiles']) || !empty($options['inactiveAccounts'])) {
+            $fileName = 'Dashboard_Report_' . Carbon::now()->format('Ymd_His') . '.xlsx';
             
-            $fileName = 'Report_' . Carbon::now()->format('Ymd_His') . '.xlsx';
-            
-            // ส่ง $options ไปให้ OverviewExport เป็นพารามิเตอร์ตัวที่ 3
             return Excel::download(new OverviewExport($startDate, $endDate, $options), $fileName);
         }
 
