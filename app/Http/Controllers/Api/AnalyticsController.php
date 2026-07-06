@@ -9,12 +9,15 @@ use App\Models\Block;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use App\Exports\AnalyticsExport;
+use Maatwebsite\Excel\Facades\Excel;
 
 class AnalyticsController extends Controller
 {
     // 1. เก็บสถิติเมื่อมีคนเข้าชมหน้าโปรไฟล์ (View) หรือ กดลิงก์ (Click) หรือ กด Save Contact
     public function track(Request $request, $username)
     {
+        \Illuminate\Support\Facades\Log::info('🎯 [เช็คคลิก SLIDER] หน้าบ้านส่งอะไรมา:', $request->all());
         try {
             $profile = Profile::where('username', $username)->first();
             
@@ -255,40 +258,37 @@ class AnalyticsController extends Controller
                     ]);
                 }
             } 
-            // 🌟 3.2 บล็อกเดี่ยว (LINK, VIDEO, IMAGE ฯลฯ)
+            // 🌟 แก้ไขตรงส่วน 3.2 บล็อกเดี่ยว (LINK)
             else {
-                $url = '';
-                $icon = $block->icon ?? 'Link';
-                $image = $block->image ?? null;
-
                 if (is_array($contentData) && count($contentData) > 0) {
-                    $url = trim($contentData[0]['url'] ?? $contentData[0]['link'] ?? '');
-                    // ดักจับไอคอนและรูปภาพที่ซ่อนอยู่ใน contentData
-                    $icon = $contentData[0]['icon'] ?? $contentData[0]['iconId'] ?? $icon;
-                    $image = $contentData[0]['image'] ?? $contentData[0]['imageUrl'] ?? $image;
+                    foreach ($contentData as $item) {
+                        $url = trim($item['url'] ?? $item['link'] ?? '');
+                        if (empty($url)) continue;
+
+                        // 🌟 จุดสำคัญ: ดึง iconId ของรายการนั้นๆ ออกมา (ถ้าไม่มีให้ไปเอาจากบล็อกหลัก)
+                        $itemIcon = $item['iconId'] ?? $item['icon'] ?? $block->icon ?? 'Link';
+
+                        $clicks = $allClicks->filter(function($click) use ($block, $url, $cleanUrl) {
+                            return (string)$click->block_id === (string)$block->id && 
+                                $cleanUrl($click->clicked_url) === $cleanUrl($url);
+                        })->count();
+
+                        $linksPerformance->push([
+                            'id' => $block->id,
+                            'title' => $item['name'] ?? $item['title'] ?? $block->title ?? 'ไม่มีชื่อลิงก์',
+                            'url' => $url,
+                            'image' => $item['image'] ?? $item['imageUrl'] ?? $block->image ?? null,
+                            'icon' => $itemIcon, // 🌟 ส่งชื่อไอคอนที่ถูกต้องไป
+                            'clicks' => $clicks
+                        ]);
+                    }
                 }
-                
-                if (empty($url)) continue; // ข้ามลิงก์ว่าง
-
-                // นับรวมคลิกของบล็อกเดี่ยว แปลงเป็น String ป้องกัน Type Mismatch
-                $clicks = $allClicks->filter(function($click) use ($block) {
-                    return (string)$click->block_id === (string)$block->id;
-                })->count();
-
-                $linksPerformance->push([
-                    'id' => $block->id,
-                    'title' => $block->title ?: 'ไม่มีชื่อลิงก์',
-                    'url' => $url,
-                    // 🌟 ส่งค่าไอคอนและรูปลิงก์เดี่ยวไปให้หน้าบ้านด้วย
-                    'image' => $image,
-                    'icon' => $icon,
-                    'clicks' => $clicks
-                ]);
             }
         }
-
         // เรียงลำดับจากคลิกมากสุดไปน้อยสุด แล้วแปลงกลับเป็น Array
         $linksPerformance = $linksPerformance->sortByDesc('clicks')->values()->toArray();
+        // 🌟 เพิ่มบรรทัดนี้: รวมยอดคลิกใหม่จากรายการด้านล่าง
+        $calculatedTotalClicks = collect($linksPerformance)->sum('clicks');
 
         // =========================================================
 
@@ -296,7 +296,7 @@ class AnalyticsController extends Controller
             'success' => true,
             'data' => [
                 'total_views'  => $totalViews,
-                'total_clicks' => $totalClicks,
+                'total_clicks' => $calculatedTotalClicks, // 🌟 เปลี่ยนมาใช้ค่าที่คำนวณใหม่ตรงนี้
                 'total_saves'  => $totalSaves,
                 'ctr'          => $ctr,
                 'trend'        => $trend,
@@ -305,4 +305,59 @@ class AnalyticsController extends Controller
             ]
         ]);
     }
+
+    // =========================================================
+    // 📥 ดาวน์โหลดรายงานสถิติเป็น Excel (เวอร์ชันดักจับ Error)
+    // =========================================================
+    public function exportReport(Request $request)
+    {
+        try {
+            $profile = $request->user()->profile;
+
+            if (!$profile) {
+                return response()->json(['message' => 'Profile not found'], 404);
+            }
+
+            // 1. ดึงวันที่ที่ผู้ใช้เลือกมาจาก URL
+            $range = $request->query('range', '7days');
+            $startDate = \Illuminate\Support\Carbon::now()->startOfDay();
+            $endDate = \Illuminate\Support\Carbon::now()->endOfDay();
+
+            if ($range === 'today') {
+                $startDate = \Illuminate\Support\Carbon::now()->startOfDay();
+            } elseif ($range === '7days') {
+                $startDate = \Illuminate\Support\Carbon::now()->subDays(6)->startOfDay();
+            } elseif ($range === '30days') {
+                $startDate = \Illuminate\Support\Carbon::now()->subDays(29)->startOfDay();
+            } elseif ($range === 'custom') {
+                $startInput = $request->query('start');
+                $endInput = $request->query('end');
+                if ($startInput && $endInput) {
+                    $startDate = \Illuminate\Support\Carbon::parse($startInput)->startOfDay();
+                    $endDate = \Illuminate\Support\Carbon::parse($endInput)->endOfDay();
+                } else {
+                    $startDate = \Illuminate\Support\Carbon::now()->subDays(6)->startOfDay();
+                }
+            }
+
+            // 2. ตั้งชื่อไฟล์ Excel
+            $fileName = 'Analytics_Report_' . \Illuminate\Support\Carbon::now()->format('Ymd_His') . '.xlsx';
+
+            // 3. สั่งให้ไลบรารี Maatwebsite สร้างไฟล์และส่งกลับไปที่หน้าบ้าน
+            return \Maatwebsite\Excel\Facades\Excel::download(
+                new \App\Exports\AnalyticsExport($profile->id, $startDate, $endDate),
+                $fileName
+            );
+
+        } catch (\Throwable $e) {
+            // 🚨 ดักจับ Error ขั้นเด็ดขาด และพิมพ์ลง Log แบบเน้นๆ
+            \Illuminate\Support\Facades\Log::error('🚨 ตัวการ EXCEL_ERROR คือ: ' . $e->getMessage() . ' | พังที่ไฟล์: ' . $e->getFile() . ' | บรรทัดที่: ' . $e->getLine());
+            
+            return response()->json([
+                'success' => false,
+                'error_message' => 'EXCEL_ERROR: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
 }
