@@ -9,7 +9,7 @@ use App\Http\Controllers\Api\BlockController;
 use App\Http\Controllers\Api\AnalyticsController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\AdminDashboardController;
-
+use App\Http\Controllers\ExportController;
 
 // Public Routes (ไม่ต้องใช้ Token)
 
@@ -51,6 +51,8 @@ Route::post('/email/verification-notification', [AuthController::class, 'resendV
 // เส้นทางสำหรับรองรับการคลิกลิงก์ยาวๆ จากในอีเมล
 Route::get('/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])
      ->name('verification.verify');
+
+Route::post('/admin/export-report', [ExportController::class, 'exportReport']);
 
 //  Protected Routes (ต้องส่ง Bearer Token)
 Route::middleware('auth:sanctum')->group(function () {
