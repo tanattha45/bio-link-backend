@@ -168,20 +168,50 @@ class AnalyticsController extends Controller
         // ⭐️ ระบบกราฟ
         // =========================================================
         
-        // 1. ดึงข้อมูล View (บังคับจัดกลุ่มวันตาม Timezone ไทย ป้องกันวันเหลื่อม)
+        // 1. ดึงข้อมูล View (บังคับจัดกลุ่มวันตาม Timezone ไทย)
         $viewsData = Analytic::where('profile_id', $profile->id)
             ->whereNull('block_id')
             ->whereBetween('created_at', [$startDate, $endDate])
             ->get()
             ->groupBy(fn($item) => Carbon::parse($item->created_at)->setTimezone('Asia/Bangkok')->format('Y-m-d'));
 
-        // 2. ดึงข้อมูล Click (บังคับจัดกลุ่มวันตาม Timezone ไทย ป้องกันวันเหลื่อม)
-        $clicksData = Analytic::where('profile_id', $profile->id)
+        // 🌟 2. ดึงข้อมูล Click และ "กรองข้อมูล (Filter)" ก่อนเอาไปลงกราฟ
+        $rawChartClicks = Analytic::where('profile_id', $profile->id)
             ->whereNotNull('block_id')
             ->where('block_id', '!=', 999999)
             ->whereBetween('created_at', [$startDate, $endDate])
-            ->get()
-            ->groupBy(fn($item) => Carbon::parse($item->created_at)->setTimezone('Asia/Bangkok')->format('Y-m-d'));
+            ->get();
+            
+        // โหลดข้อมูล Block เพื่อใช้ตรวจสอบ
+        $tempBlocks = Block::where('profile_id', $profile->id)->get()->keyBy('id');
+        
+        $tempCleanUrl = function($u) {
+            if (empty($u)) return '';
+            $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
+            $u = preg_replace('#^www\.#', '', $u);
+            return strtolower(trim($u));
+        };
+
+        // ทำการกรอง (Filter) ให้เหลือเฉพาะคลิกที่ตรงกับ URL จริงๆ
+        $filteredChartClicks = $rawChartClicks->filter(function($click) use ($tempBlocks, $tempCleanUrl) {
+            $block = $tempBlocks->get($click->block_id);
+            if (!$block) return false;
+
+            $contentData = is_string($block->content_data) ? json_decode($block->content_data, true) : $block->content_data;
+            if (is_array($contentData)) {
+                foreach ($contentData as $item) {
+                    $url = trim($item['url'] ?? $item['link'] ?? '');
+                    if (!empty($url) && $tempCleanUrl($click->clicked_url) === $tempCleanUrl($url)) return true;
+                }
+            } else {
+                $url = trim($block->url ?? '');
+                if (!empty($url) && $tempCleanUrl($click->clicked_url) === $tempCleanUrl($url)) return true;
+            }
+            return false;
+        });
+
+        // 🌟 จัดกลุ่มข้อมูลใส่กราฟ จากข้อมูลที่ผ่านการกรองแล้วเท่านั้น
+        $clicksData = $filteredChartClicks->groupBy(fn($item) => Carbon::parse($item->created_at)->setTimezone('Asia/Bangkok')->format('Y-m-d'));
 
         // 3. เตรียมข้อมูลใส่ Array ให้ตรงกับวันที่
         $chartData = [];
@@ -249,7 +279,7 @@ class AnalyticsController extends Controller
 
                     $linksPerformance->push([
                         'id' => $block->id,
-                        'title' => $item['name'] ?? $item['title'] ?? $block->title ?? 'ไม่มีชื่อลิงก์',
+                        'title' => $item['name'] ?? $item['title'] ?? $block->title ?? 'ไม่มีชื่อ',
                         'url' => $url,
                         // 🌟 ดึงรูปภาพและไอคอน เพื่อให้ Slider โชว์รูปได้เหมือน Shop
                         'image' => $item['image'] ?? $item['imageUrl'] ?? null,
@@ -275,7 +305,7 @@ class AnalyticsController extends Controller
 
                         $linksPerformance->push([
                             'id' => $block->id,
-                            'title' => $item['name'] ?? $item['title'] ?? $block->title ?? 'ไม่มีชื่อลิงก์',
+                            'title' => $item['name'] ?? $item['title'] ?? $block->title ?? 'ไม่มีชื่อ',
                             'url' => $url,
                             'image' => $item['image'] ?? $item['imageUrl'] ?? $block->image ?? null,
                             'icon' => $itemIcon, // 🌟 ส่งชื่อไอคอนที่ถูกต้องไป
