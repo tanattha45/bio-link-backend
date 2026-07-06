@@ -23,9 +23,9 @@ class AnalyticsExport implements WithMultipleSheets
     public function sheets(): array
     {
         return [
-            new Sheets\DailyOverviewSheet($this->profileId, $this->startDate, $this->endDate),
-            new Sheets\ClickLogsSheet($this->profileId, $this->startDate, $this->endDate),
-            new Sheets\SaveContactLogsSheet($this->profileId, $this->startDate, $this->endDate),
+            new Sheets\User\DailyOverviewSheet($this->profileId, $this->startDate, $this->endDate),
+            new Sheets\User\ClickLogsSheet($this->profileId, $this->startDate, $this->endDate),
+            new Sheets\User\SaveContactLogsSheet($this->profileId, $this->startDate, $this->endDate),
         ];
     }
 }
