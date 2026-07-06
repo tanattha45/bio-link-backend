@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Exports\Sheets;
+namespace App\Exports\Sheets\User;
 
 use App\Models\Analytic;
 use Maatwebsite\Excel\Concerns\FromCollection;
