@@ -12,7 +12,7 @@ use Carbon\Carbon;
 use Maatwebsite\Excel\Concerns\WithEvents;
 use Maatwebsite\Excel\Events\AfterSheet;
 
-class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, ShouldAutoSize, WithStrictNullComparison ,WithEvents
+class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, ShouldAutoSize, WithStrictNullComparison, WithEvents
 {
     protected $start;
     protected $end;
@@ -35,44 +35,33 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
             ->leftJoin('analytics', 'profiles.id', '=', 'analytics.profile_id')
             ->select(
                 'profiles.id',
-                'profiles.username',
-                DB::raw("COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$this->start}' AND '{$this->end}' THEN 1 END) as views"),
-                DB::raw("COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$this->prevStart}' AND '{$this->prevEnd}' THEN 1 END) as prev_views"),
-                DB::raw("COUNT(CASE WHEN analytics.block_id IS NOT NULL AND analytics.block_id != 999999 AND analytics.created_at BETWEEN '{$this->start}' AND '{$this->end}' THEN 1 END) as clicks"),
-                DB::raw("COUNT(CASE WHEN analytics.block_id = 999999 AND analytics.created_at BETWEEN '{$this->start}' AND '{$this->end}' THEN 1 END) as saves")
+                'profiles.username'
             )
             ->whereBetween('analytics.created_at', [$this->prevStart, $this->end])
             ->groupBy('profiles.id', 'profiles.username')
             ->get();
 
         return $data->map(function ($page) {
-            $views = (int)$page->views;
-            $clicks = (int)$page->clicks;
-            $saves = (int)$page->saves;
-            $prevViews = (int)$page->prev_views;
+            // ดึง Views
+            $views = DB::table('analytics')
+                ->where('profile_id', $page->id)
+                ->whereNull('block_id')
+                ->whereBetween('created_at', [$this->start, $this->end])
+                ->count();
 
-            // 1. คำนวณ CTR
-            $ctr = $views > 0 ? round(($clicks / $views) * 100, 1) : 0.0;
-            
-            // 2. คำนวณ Growth 
-            $growth = 0;
-            if ($prevViews == 0 && $views > 0) {
-                $growth = 100;
-            } elseif ($prevViews > 0) {
-                $growth = round((($views - $prevViews) / $prevViews) * 100, 1);
-            }
-            $growthFormatted = ($growth > 0 ? '+' : '') . $growth . '%';
+            $prevViews = DB::table('analytics')
+                ->where('profile_id', $page->id)
+                ->whereNull('block_id')
+                ->whereBetween('created_at', [$this->prevStart, $this->prevEnd])
+                ->count();
 
-            // 3. คำนวณ Performance Score 
-            $baseScore = ($views * 1) + ($clicks * 5) + ($saves * 15);
-            $growthBonus = min($growth, 50) * 0.01; 
-            $finalScore = round($baseScore * (1 + $growthBonus), 2);
+            $saves = DB::table('analytics')
+                ->where('profile_id', $page->id)
+                ->where('block_id', 999999)
+                ->whereBetween('created_at', [$this->start, $this->end])
+                ->count();
 
-            // =========================================================
-            // 🌟 4. ระบบค้นหา Popular Link (เจาะลึกถึงลิงก์ย่อย เหมือนใน Controller)
-            // =========================================================
-            
-            // ดึงรายการคลิกทั้งหมดของโปรไฟล์นี้ (เพื่อเอา clicked_url มาเทียบ)
+            // 🌟 ระบบค้นหา Popular Link และยอดคลิกที่แท้จริง
             $allClicks = DB::table('analytics')
                 ->where('profile_id', $page->id)
                 ->whereNotNull('block_id')
@@ -80,7 +69,6 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
                 ->whereBetween('created_at', [$this->start, $this->end])
                 ->get();
 
-            // ฟังก์ชันทำความสะอาด URL
             $cleanUrl = function($u) {
                 if (empty($u)) return '';
                 $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
@@ -91,6 +79,7 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
             $popularTitle = 'ยังไม่มีข้อมูลคลิก';
             $popularUrl = '-';
             $popularClicks = 0;
+            $accurateClicks = 0; // ยอดคลิกที่ผ่านการกรองแล้ว
 
             if ($allClicks->count() > 0) {
                 $blocks = DB::table('blocks')->where('profile_id', $page->id)->get();
@@ -104,7 +93,6 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
                             $url = trim($item['url'] ?? $item['link'] ?? '');
                             if (empty($url)) continue;
 
-                            // นับยอดคลิก
                             $clicksCount = $allClicks->filter(function($click) use ($block, $url, $cleanUrl) {
                                 return (string)$click->block_id === (string)$block->id && 
                                        $cleanUrl($click->clicked_url) === $cleanUrl($url);
@@ -121,16 +109,17 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
                     }
                 }
 
-                // กรอง YouTube / TikTok และ VIDEO ออก เหมือนหน้าบ้าน
+                // สรุปยอดคลิกที่ถูกต้อง (ตัดลิงก์ที่ไม่มีอยู่จริงออก)
+                $accurateClicks = $linksPerformance->sum('clicks');
+
+                // กรองสำหรับ Popular Link
                 $filteredLinks = $linksPerformance->filter(function($link) {
                     $iconStr = strtolower($link['icon'] ?? '');
                     $typeStr = strtolower($link['type'] ?? '');
                     return !($iconStr === 'youtube' || $iconStr === 'tiktok' || $typeStr === 'video');
                 });
 
-                // จัดอันดับลิงก์ที่ถูกคลิกเยอะที่สุดมา 1 อัน
                 $topLink = $filteredLinks->sortByDesc('clicks')->first();
-                
                 if ($topLink && $topLink['clicks'] > 0) {
                     $popularTitle = $topLink['title'];
                     $popularUrl = $topLink['url'];
@@ -138,19 +127,28 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
                 }
             }
 
-            // แมปข้อมูลให้ตรงกับหัวคอลัมน์ใหม่
+            // คำนวณสถิติ
+            $ctr = $views > 0 ? round((($accurateClicks+(int)$saves) / $views) * 100, 1) : 0.0;
+            $growth = 0;
+            if ($prevViews == 0 && $views > 0) $growth = 100;
+            elseif ($prevViews > 0) $growth = round((($views - $prevViews) / $prevViews) * 100, 1);
+            
+            $baseScore = ($views * 1) + ($accurateClicks * 5) + ($saves * 15);
+            $growthBonus = min($growth, 50) * 0.01; 
+            $finalScore = round($baseScore * (1 + $growthBonus), 2);
+
             return [
                 'Profile Name'           => '@' . $page->username,
-                'Views (Current Period)' => $views,
-                'Views Growth (%)'       => $growthFormatted,
-                'Clicks'                 => $clicks,
+                'Views (Current Period)' => (int)$views,
+                'Views Growth (%)'       => ($growth > 0 ? '+' : '') . $growth . '%',
+                'Clicks'                 => (int)$accurateClicks, // ใช้ยอดที่กรองแล้ว
                 'CTR (%)'                => $ctr . '%',
-                'Saves'                  => $saves,
-                'Popular Link Title'     => $popularTitle,       // 🌟 อัปเดตให้เป็นชื่อที่ถูกต้อง
+                'Saves'                  => (int)$saves,
+                'Popular Link Title'     => $popularTitle,
                 'Popular Link URL'       => $popularUrl,
-                'Popular Link Clicks'    => $popularClicks,      // 🌟 อัปเดตเป็นจำนวนคลิกที่คำนวณใหม่
+                'Popular Link Clicks'    => (int)$popularClicks,
                 'Performance Score'      => $finalScore,
-                '_raw_score'             => $finalScore 
+                '_raw_score'             => $finalScore
             ];
         })->sortByDesc('_raw_score')->map(function($item) {
             unset($item['_raw_score']);

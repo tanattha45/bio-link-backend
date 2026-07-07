@@ -8,40 +8,43 @@ use Maatwebsite\Excel\Concerns\WithHeadings;
 use Maatwebsite\Excel\Concerns\WithTitle;
 use Maatwebsite\Excel\Concerns\ShouldAutoSize;
 use Maatwebsite\Excel\Concerns\WithStrictNullComparison;
+use Carbon\Carbon;
 use Maatwebsite\Excel\Concerns\WithEvents;
 use Maatwebsite\Excel\Events\AfterSheet;
 
-class SavedActionsSheet implements FromCollection, WithHeadings, WithTitle, ShouldAutoSize, WithStrictNullComparison,WithEvents
+class SavedActionsSheet implements FromCollection, WithHeadings, WithTitle, ShouldAutoSize, WithStrictNullComparison, WithEvents
 {
     protected $start;
     protected $end;
 
     public function __construct($start, $end)
     {
-        $this->start = $start;
-        $this->end = $end;
+        // 💡 ปรับให้เป็น Carbon Object ทันทีเพื่อป้องกันปัญหา String Format
+        $this->start = Carbon::parse($start)->startOfDay();
+        $this->end = Carbon::parse($end)->endOfDay();
     }
 
     public function collection()
     {
-        // ใช้ session_id แทน visitor_id ตามฐานข้อมูลจริงของคุณ
+        // ใช้ DB::table และเช็คเงื่อนไข block_id = 999999
         return DB::table('analytics')
             ->join('profiles', 'analytics.profile_id', '=', 'profiles.id')
             ->select(
                 'analytics.created_at',
-                'analytics.session_id', // ใช้ session_id ในตารางแทน
+                'analytics.session_id',
                 'profiles.username as owner_username',
                 'analytics.user_agent'
             )
             ->where('analytics.block_id', 999999)
-            ->whereBetween('analytics.created_at', [$this->start, $this->end])
+            // 💡 ตรวจสอบช่วงเวลาอีกครั้ง
+            ->whereBetween('analytics.created_at', [$this->start->toDateTimeString(), $this->end->toDateTimeString()])
             ->orderBy('analytics.created_at', 'desc')
             ->get()
             ->map(function ($item) {
                 return [
-                    'timestamp' => \Carbon\Carbon::parse($item->created_at)->format('d/m/Y H:i'),
+                    'timestamp' => Carbon::parse($item->created_at)->format('d/m/Y H:i'),
                     'visitor'   => $item->session_id ?? 'Unknown Session',
-                    'owner'     => '@' . $item->owner_username,
+                    'owner'     => $item->owner_username,
                     'device'    => $this->parseDevice($item->user_agent),
                 ];
             });
@@ -49,7 +52,7 @@ class SavedActionsSheet implements FromCollection, WithHeadings, WithTitle, Shou
 
     private function parseDevice($ua)
     {
-        if (!$ua) return 'Desktop'; // default ถ้าไม่มีข้อมูล
+        if (empty($ua)) return 'Desktop';
         
         $ua = strtolower($ua);
         if (strpos($ua, 'iphone') !== false || strpos($ua, 'android') !== false) {
