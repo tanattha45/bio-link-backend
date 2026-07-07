@@ -144,18 +144,32 @@ class AdminDashboardController extends Controller
     private function getStatCardsData($start, $end, $prevStart, $prevEnd)
     {
         // 3. ดึงข้อมูล "ยอดผู้สมัครใหม่" (ทั้งหมด VS ยืนยันแล้ว)
-        $currentAllSignups = User::whereBetween('created_at', [$start, $end])->count();
-        $currentVerifiedSignups = User::whereBetween('created_at', [$start, $end])
+        $currentAllSignups = User::where('role', '!=', 'admin')
+            ->whereBetween('created_at', [$start, $end])
+            ->count();
+            
+        $currentVerifiedSignups = User::where('role', '!=', 'admin')
+            ->whereBetween('created_at', [$start, $end])
             ->whereNotNull('email_verified_at')
             ->count();
-        $prevAllSignups = User::whereBetween('created_at', [$prevStart, $prevEnd])->count();
+            
+        $prevAllSignups = User::where('role', '!=', 'admin')
+            ->whereBetween('created_at', [$prevStart, $prevEnd])
+            ->count();
 
         // 4. ดึงข้อมูล "สมาชิกทั้งหมด" (ทั้งหมด VS ยืนยันแล้ว)
-        $currentTotalUsers = User::where('created_at', '<=', $end)->count();
-        $currentVerifiedTotalUsers = User::where('created_at', '<=', $end)
+        $currentTotalUsers = User::where('role', '!=', 'admin')
+            ->where('created_at', '<=', $end)
+            ->count();
+            
+        $currentVerifiedTotalUsers = User::where('role', '!=', 'admin')
+            ->where('created_at', '<=', $end)
             ->whereNotNull('email_verified_at')
             ->count();
-        $prevTotalUsers = User::where('created_at', '<=', $prevEnd)->count();
+            
+        $prevTotalUsers = User::where('role', '!=', 'admin')
+            ->where('created_at', '<=', $prevEnd)
+            ->count();
 
         // 5. ดึงข้อมูล "บล็อกทั้งหมด"
         // JSON_LENGTH เป็นตัวถามใน content data ว่าในนั้นมีอยู่กี่รายการ
@@ -174,17 +188,52 @@ class AdminDashboardController extends Controller
         // 6. ดึงข้อมูล "ยอดคลิกรวม" (ไม่นับ Save Contact)
         // เอาคอลัมน์ block_id มาใช้โดยค่าในคอลัมน์นี้ต้อง ไม่เป็น NULL เพราะ คือการเข้าชมโปนไฟล์ไม่ใช่การคลิ๊ก
         // block_id', '!=', 999999 คือ เลือกเฉพาะข้อมูลที่ block_id ไม่เท่ากับ 999999 เพราะ มันคือ save contact
-        $currentClicks = DB::table('analytics')
-            ->whereNotNull('block_id')
-            ->where('block_id', '!=', 999999)
-            ->whereBetween('created_at', [$start, $end])
-            ->count();
+        
+        // 💡 [จุดแก้ไขสำหรับคำนวณยอดคลิกแบบ In-Memory]:
+        // ดึงข้อมูลออกมาล้างโครงสร้าง URL และคัดกรองลิงก์ย่อยที่อยู่ในอาเรย์ JSON ผ่าน Collection แทนคำสั่งฐานข้อมูล SQL
+        // เพื่อลบลิงก์ที่ถูกผู้ใช้ลบออกไปแล้ว และไม่ให้ติดบั๊กเครื่องหมายสแลชจนกลายเป็น 0 หรือ Error 500 คอลัมน์ blocks.url ครับ
+        $cleanUrl = function($u) {
+            if (empty($u)) return '';
+            $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
+            $u = preg_replace('#^www\.#', '', $u);
+            return strtolower(trim($u));
+        };
+
+        $rawCurrentClicks = DB::table('analytics')
+            ->join('blocks', 'analytics.block_id', '=', 'blocks.id')
+            ->whereNotNull('analytics.block_id')
+            ->where('analytics.block_id', '!=', 999999)
+            ->whereBetween('analytics.created_at', [$start, $end])
+            ->get(['analytics.clicked_url', 'blocks.content_data']);
+
+        $currentClicks = $rawCurrentClicks->filter(function($click) use ($cleanUrl) {
+            $contentData = is_string($click->content_data) ? json_decode($click->content_data, true) : $click->content_data;
+            if (is_array($contentData)) {
+                foreach ($contentData as $item) {
+                    $url = trim($item['url'] ?? $item['link'] ?? '');
+                    if (!empty($url) && $cleanUrl($click->clicked_url) === $cleanUrl($url)) return true;
+                }
+            }
+            return false;
+        })->count();
             
-        $prevClicks = DB::table('analytics')
-            ->whereNotNull('block_id')
-            ->where('block_id', '!=', 999999)
-            ->whereBetween('created_at', [$prevStart, $prevEnd])
-            ->count();
+        $rawPrevClicks = DB::table('analytics')
+            ->join('blocks', 'analytics.block_id', '=', 'blocks.id')
+            ->whereNotNull('analytics.block_id')
+            ->where('analytics.block_id', '!=', 999999)
+            ->whereBetween('analytics.created_at', [$prevStart, $prevEnd])
+            ->get(['analytics.clicked_url', 'blocks.content_data']);
+
+        $prevClicks = $rawPrevClicks->filter(function($click) use ($cleanUrl) {
+            $contentData = is_string($click->content_data) ? json_decode($click->content_data, true) : $click->content_data;
+            if (is_array($contentData)) {
+                foreach ($contentData as $item) {
+                    $url = trim($item['url'] ?? $item['link'] ?? '');
+                    if (!empty($url) && $cleanUrl($click->clicked_url) === $cleanUrl($url)) return true;
+                }
+            }
+            return false;
+        })->count();
 
         // ดึงข้อมูล "ยอดกด Save Contact" (block_id = 999999)
         $currentSaves = DB::table('analytics')
@@ -249,17 +298,43 @@ class AdminDashboardController extends Controller
             ->whereBetween('created_at', [$start, $end])->whereNull('block_id')
             ->groupBy('date')->pluck('count', 'date');
 
-        $dailyClicks = DB::table('analytics')
-            ->select(DB::raw('DATE(created_at) as date'), DB::raw('COUNT(*) as count'))
-            ->whereBetween('created_at', [$start, $end])->whereNotNull('block_id')->where('block_id', '!=', 999999)
-            ->groupBy('date')->pluck('count', 'date');
+        // 💡 [จุดแก้ไขสำหรับคำนวณยอดคลิกฝั่งกราฟรายวัน]:
+        // ล้างรูปแบบคิวรี่ตาราง blocks.url ออกเพื่อปิดบั๊ก Error 500 และจับกลุ่มตัวเลขสถิติให้ถูกต้องตรงกับการ์ดรวมด้านบนครับ
+        $cleanUrl = function($u) {
+            if (empty($u)) return '';
+            $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
+            $u = preg_replace('#^www\.#', '', $u);
+            return strtolower(trim($u));
+        };
+
+        $rawChartClicks = DB::table('analytics')
+            ->join('blocks', 'analytics.block_id', '=', 'blocks.id')
+            ->whereBetween('analytics.created_at', [$start, $end])
+            ->whereNotNull('analytics.block_id')
+            ->where('analytics.block_id', '!=', 999999)
+            ->get(['analytics.created_at', 'analytics.clicked_url', 'blocks.content_data']);
+
+        $filteredChartClicks = $rawChartClicks->filter(function($click) use ($cleanUrl) {
+            $contentData = is_string($click->content_data) ? json_decode($click->content_data, true) : $click->content_data;
+            if (is_array($contentData)) {
+                foreach ($contentData as $item) {
+                    $url = trim($item['url'] ?? $item['link'] ?? '');
+                    if (!empty($url) && $cleanUrl($click->clicked_url) === $cleanUrl($url)) return true;
+                }
+            }
+            return false;
+        });
+
+        $clicksDataGrouped = $filteredChartClicks->groupBy(fn($item) => Carbon::parse($item->created_at)->setTimezone('Asia/Bangkok')->format('Y-m-d'));
 
         $dailySaves = DB::table('analytics')
             ->select(DB::raw('DATE(created_at) as date'), DB::raw('COUNT(*) as count'))
             ->whereBetween('created_at', [$start, $end])->where('block_id', 999999)
             ->groupBy('date')->pluck('count', 'date');
 
-        $dailySignups = User::select(DB::raw('DATE(created_at) as date'), DB::raw('COUNT(*) as count'))
+        // ดึงข้อมูลยอดสมัครรายวัน (เพิ่มเงื่อนไขตัด admin ออก)
+        $dailySignups = User::where('role', '!=', 'admin')
+            ->select(DB::raw('DATE(created_at) as date'), DB::raw('COUNT(*) as count'))
             ->whereBetween('created_at', [$start, $end])
             ->groupBy('date')->pluck('count', 'date');
 
@@ -269,7 +344,10 @@ class AdminDashboardController extends Controller
             ->groupBy('date')->pluck('count', 'date');
 
         // 7.2 คำนวณฐานของ User เดิมที่มีอยู่ก่อนเริ่มวันที่ startDate (เพื่อทำกราฟสมาชิกสะสม)
-        $baseTotalUsers = User::where('created_at', '<', $start)->count();
+        $baseTotalUsers = User::where('role', '!=', 'admin')
+            ->where('created_at', '<', $start)
+            ->count();
+            
         $runningTotalUsers = $baseTotalUsers;
 
         $thaiMonths = [
@@ -290,10 +368,12 @@ class AdminDashboardController extends Controller
             $signupsToday = isset($dailySignups[$dateStr]) ? (int)$dailySignups[$dateStr] : 0;
             $runningTotalUsers += $signupsToday;
 
+            $clicksCount = $clicksDataGrouped->has($dateStr) ? $clicksDataGrouped->get($dateStr)->count() : 0;
+
             $chartData[] = [
                 'name' => $formattedDate, 
                 'views' => isset($dailyViews[$dateStr]) ? (int)$dailyViews[$dateStr] : 0,
-                'clicks' => isset($dailyClicks[$dateStr]) ? (int)$dailyClicks[$dateStr] : 0,
+                'clicks' => $clicksCount,
                 'saves' => isset($dailySaves[$dateStr]) ? (int)$dailySaves[$dateStr] : 0,
                 'signups' => $signupsToday,
                 'total_users' => $runningTotalUsers,
@@ -320,8 +400,8 @@ class AdminDashboardController extends Controller
                 // 2. Views รอบก่อนหน้า
                 DB::raw("COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$prevStart}' AND '{$prevEnd}' THEN 1 END) as prev_views"),
                 
-                // 3. Clicks รอบปัจจุบัน
-                DB::raw("COUNT(CASE WHEN analytics.block_id IS NOT NULL AND analytics.block_id != 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) as clicks"),
+                // 3. Clicks รอบปัจจุบัน (อันนี้คือยอดดิบ เราจะดึงมาเผื่อเรียงลำดับคร่าวๆ ก่อน)
+                DB::raw("COUNT(CASE WHEN analytics.block_id IS NOT NULL AND analytics.block_id != 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) as raw_clicks"),
                 
                 // 4. Saves รอบปัจจุบัน
                 DB::raw("COUNT(CASE WHEN analytics.block_id = 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) as saves")
@@ -329,7 +409,7 @@ class AdminDashboardController extends Controller
             ->whereBetween('analytics.created_at', [$prevStart, $end])
             ->groupBy('profiles.id', 'profiles.username')
             
-            // เรียงลำดับจากคะแนน Performance Score
+            // เรียงลำดับจากคะแนน Performance Score แบบคร่าวๆ จากฐานข้อมูลก่อนดึงมา 5 อันดับ
             ->orderByRaw("(
                 (COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) * 1) +
                 (COUNT(CASE WHEN analytics.block_id IS NOT NULL AND analytics.block_id != 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) * 5) +
@@ -359,6 +439,7 @@ class AdminDashboardController extends Controller
 
                 $popularTitle = 'ยังไม่มีข้อมูลคลิก';
                 $popularClicks = 0;
+                $accurateClicks = 0; // 💡 สร้างตัวแปรใหม่เพื่อเก็บ "ยอดคลิกที่แท้จริง" (ตัดลิงก์ที่โดนลบออกแล้ว)
 
                 if ($allClicks->count() > 0) {
                     $blocks = DB::table('blocks')->where('profile_id', $page->id)->get();
@@ -387,8 +468,27 @@ class AdminDashboardController extends Controller
                                     'type' => $block->type ?? ''
                                 ]);
                             }
+                        } else {
+                            // 💡 เผื่อกรณีที่เป็นลิงก์เดี่ยว ไม่ใช่ Array
+                            $url = trim($block->url ?? '');
+                            if (!empty($url)) {
+                                $clicksCount = $allClicks->filter(function($click) use ($block, $url, $cleanUrl) {
+                                    return (string)$click->block_id === (string)$block->id && 
+                                           $cleanUrl($click->clicked_url) === $cleanUrl($url);
+                                })->count();
+
+                                $linksPerformance->push([
+                                    'title' => $block->title ?? 'ไม่มีชื่อลิงก์',
+                                    'clicks' => $clicksCount,
+                                    'icon' => $block->icon ?? 'Link',
+                                    'type' => $block->type ?? ''
+                                ]);
+                            }
                         }
                     }
+
+                    // 💡 คำนวณยอดคลิกรวมที่แม่นยำ (บวกเฉพาะคลิกของลิงก์ที่ยังหลงเหลืออยู่)
+                    $accurateClicks = $linksPerformance->sum('clicks');
 
                     // กรอง YouTube / TikTok และบล็อกประเภท VIDEO ออก (ตามเงื่อนไขในไฟล์แยกของคุณ)
                     $filteredLinks = $linksPerformance->filter(function($link) {
@@ -409,7 +509,7 @@ class AdminDashboardController extends Controller
 
                 // คำนวณสถิติและสร้างผลลัพธ์
                 $views = (int)$page->views;
-                $clicks = (int)$page->clicks;
+                $clicks = $accurateClicks; // 💡 แทนที่ยอดดิบ ($page->raw_clicks) ด้วยยอดคลิกที่คำนวณใหม่
                 $saves = (int)$page->saves;
                 $prevViews = (int)$page->prev_views;
 
@@ -419,9 +519,9 @@ class AdminDashboardController extends Controller
                 elseif ($prevViews > 0) $growth = round((($views - $prevViews) / $prevViews) * 100, 1);
 
                 // คำนวณ CTR
-                $ctr = $views > 0 ? round(($clicks / $views) * 100, 1) : 0.0;
+                $ctr = $views > 0 ? round((($clicks+$saves) / $views) * 100, 1) : 0.0;
 
-                // คำนวณ Performance Score
+                // คำนวณ Performance Score ใหม่ ให้สัมพันธ์กับยอดคลิกใหม่
                 $baseScore = ($views * 1) + ($clicks * 5) + ($saves * 15);
                 $growthBonus = min($growth, 50) * 0.01; 
                 $finalScore = round($baseScore * (1 + $growthBonus), 2);
@@ -431,7 +531,7 @@ class AdminDashboardController extends Controller
                     'name' => '@' . $page->name, 
                     'link' => 'bio.link/' . $page->link,
                     'views' => $views,
-                    'clicks' => $clicks,
+                    'clicks' => $clicks, // 💡 ยอดนี้จะแสดงผลถูกต้องตามลิงก์ที่มีอยู่จริง
                     'saves' => $saves, 
                     'ctr' => $ctr,
                     'score' => $finalScore,
@@ -441,7 +541,11 @@ class AdminDashboardController extends Controller
                         'clicks' => $popularClicks
                     ]
                 ];
-            });
+            })
+            // 💡 สั่งเรียงลำดับ Array ด้วยคะแนนที่คำนวณใหม่อีกครั้งให้แม่นยำ 100%
+            ->sortByDesc('score')
+            ->values()
+            ->toArray();
     }
 
     // คำนวณเปอร์เซ็นต์ 
@@ -453,15 +557,15 @@ class AdminDashboardController extends Controller
         return round((($curr - $prev) / $prev) * 100, 1);
     }
 
-    // InactiveUsers 
-    private function getInactiveUsersData($minDays = 7) // เปลี่ยน default เป็น 7 วัน
+    private function getInactiveUsersData($minDays = 7)
     {
         $thresholdDate = now()->subDays((int)$minDays);
         $thresholdTimestamp = $thresholdDate->timestamp;
 
         $users = User::select('users.id', 'users.display_name', 'users.username', 'users.created_at')
+            ->where('users.role', 'user') 
             ->selectSub(function ($query) {
-                $query->selectRaw('MAX(last_activity)') // เวลาที่ผู้ใช้ล็อกอินหรือใช้งานระบบล่าสุด
+                $query->selectRaw('MAX(last_activity)')
                       ->from('sessions')
                       ->whereColumn('sessions.user_id', 'users.id');
             }, 'last_active_ts')
@@ -471,6 +575,15 @@ class AdminDashboardController extends Controller
                       ->join('profiles', 'profiles.id', '=', 'blocks.profile_id')
                       ->whereColumn('profiles.user_id', 'users.id');
             }, 'total_links_count')
+            
+            // 🛠️ 1. เพิ่ม Subquery เพื่อดึงเวลาแก้ไขบล็อกล่าสุด (MAX updated_at จากตาราง blocks)
+            ->selectSub(function ($query) {
+                $query->selectRaw('MAX(blocks.updated_at)') // ใช้ updated_at เพื่อดูเวลาที่แก้ไขบล็อกครั้งสุดท้าย
+                      ->from('blocks')
+                      ->join('profiles', 'profiles.id', '=', 'blocks.profile_id')
+                      ->whereColumn('profiles.user_id', 'users.id');
+            }, 'last_block_updated_at')
+            
             ->selectSub(function ($query) {
                 $query->selectRaw('MAX(analytics.created_at)')
                       ->from('analytics')
@@ -481,57 +594,74 @@ class AdminDashboardController extends Controller
 
         return $users->filter(function ($user) use ($thresholdTimestamp, $thresholdDate) {
             
+            // 1. เช็กความเคลื่อนไหวฝั่ง "การล็อกอิน (Session) หรือ วันสมัคร"
+            $isLoginInactive = false;
             if ($user->last_active_ts) {
-                return $user->last_active_ts < $thresholdTimestamp;
+                // ล็อกอินล่าสุดเก่ากว่า $threshold (เช่น 7 วัน) ใช่หรือไม่
+                $isLoginInactive = $user->last_active_ts < $thresholdTimestamp; 
+            } else {
+                // ถ้าไม่มี Session เลย ให้ดูวันที่สมัครแทน
+                $createdAt = Carbon::parse($user->created_at);
+                $isLoginInactive = $createdAt->lessThan($thresholdDate);
             }
+
+            // 2. เช็กความเคลื่อนไหวฝั่ง "การแก้ไขบล็อกล่าสุด"
+            $isBlockInactive = true; // ตั้งต้นให้ true ไว้ก่อน กรณีที่ไม่มีบล็อกเลย
+            if ($user->last_block_updated_at) {
+                $blockUpdatedAt = Carbon::parse($user->last_block_updated_at);
+                // แก้บล็อกล่าสุดเก่ากว่า $threshold ใช่หรือไม่
+                $isBlockInactive = $blockUpdatedAt->lessThan($thresholdDate);
+            }
+
+            // บัญชีนี้จะถูกส่งไปแสดงผล (ถือว่า Inactive จริงๆ) ก็ต่อเมื่อ...
+            // "ไม่ได้ล็อกอินนานกว่ากำหนด" AND "ไม่ได้แก้บล็อกนานกว่ากำหนด" ทั้งคู่
+            return $isLoginInactive && $isBlockInactive;
             
-            $createdAt = Carbon::parse($user->created_at);
-            return $createdAt->lessThan($thresholdDate);
-            
-        // เพิ่มการ use ($minDays) เข้าไปใน map เพื่อเอาค่าวันไปคำนวณสถานะ
         })->map(function ($user) use ($minDays) { 
             
-            $createdAt = $user->created_at ? Carbon::parse($user->created_at) : now();
-            
-            $lastActiveDate = $user->last_active_ts 
-                ? Carbon::createFromTimestamp((int)$user->last_active_ts) 
-                : $createdAt;
-                
-            $daysInactive = (int) $lastActiveDate->diffInDays(now());
+            // 2. จัดการข้อมูลสำหรับคอลัมน์ "แก้ไขบล็อกล่าสุด"
+            if ($user->last_block_updated_at) {
+                $lastBlockUpdate = Carbon::parse($user->last_block_updated_at);
+                $dateDisplay = $lastBlockUpdate->translatedFormat('d M Y');
+                $daysInactive = (int) $lastBlockUpdate->diffInDays(now());
+                $daysDisplay = $daysInactive . ' วันที่แล้ว';
+            } else {
+                // กรณีบัญชีนี้ยังไม่เคยสร้างบล็อกเลย (0 บล็อก)
+                $dateDisplay = 'ไม่มีข้อมูล';
+                $daysDisplay = '-';
+            }
 
             $lastLinkActivity = $user->last_link_activity_at ? Carbon::parse($user->last_link_activity_at) : null;
 
-            // ค่า Default สีแดง
+            // เช็กสถานะ (แก้ Bug hasTraffic ให้ตรงกับสถานะด้วย)
             $status = 'ไม่มีความเคลื่อนไหว';
             $statusColor = 'bg-red-500';
             
             if ((int)$user->total_links_count === 0) {
-            $status = 'สมัครแล้วยังไม่ตั้งค่า';
-            $statusColor = 'bg-yellow-500';
+                $status = 'สมัครแล้วยังไม่ตั้งค่า';
+                $statusColor = 'bg-yellow-500';
             
-        } else if ($lastLinkActivity && $lastLinkActivity->greaterThanOrEqualTo(now()->subDays(7))) {
-            // โจทก์ของเรา: ไม่ล็อกอินนานแล้ว แต่ลิงก์ยังมีคนโต้ตอบภายใน 7 วันที่ผ่านมา
-            $status = 'ลิงก์ยังทำงานอยู่';
-            $statusColor = 'bg-blue-500'; // เปลี่ยนเป็นสีฟ้าเพื่อสะท้อนสถานะ Active ทางอ้อม
-            
-        } else {
-            // ไม่ล็อกอินด้วย และลิงก์ก็ไม่มีคนคลิก/ดูเลยเกิน 7 วัน
-            $status = 'ไม่มีความเคลื่อนไหว';
-            $statusColor = 'bg-red-500';
-        }
-
-            $colors = ['bg-red-500', 'bg-green-500', 'bg-slate-400', 'bg-blue-500', 'bg-purple-500'];
-            $iconColor = $colors[$user->id % count($colors)];
+            } else if ($lastLinkActivity && $lastLinkActivity->greaterThanOrEqualTo(now()->subDays(7))) {
+                $status = 'มีผู้เข้าชม (ไม่มีการอัพเดทบล็อก)';
+                $statusColor = 'bg-blue-500'; 
+                
+            } else {
+                $status = 'ไม่มีผู้เข้าชม และ ไม่มีการอัพเดทบัญชี';
+                $statusColor = 'bg-red-500';
+            }
 
             return [
                 'id' => $user->id,
                 'name' => $user->display_name,    
                 'handle' => '@' . $user->username, 
                 'links' => (int)$user->total_links_count,
-                'date' => $lastActiveDate->translatedFormat('d M Y'), 
-                'daysAgo' => $daysInactive . ' วันที่แล้ว',
+                
+                // 3. นำค่าที่ผ่านการจัดการแล้วไปแสดงผลแทนของเดิม
+                'date' => $dateDisplay, 
+                'daysAgo' => $daysDisplay,
+                
                 'lastLinkActivity' => $lastLinkActivity ? $lastLinkActivity->translatedFormat('d M Y') : 'ไม่มีข้อมูลการใช้งาน',
-                'hasTraffic' => $status === 'ลิงก์ยังทำงานอยู่', // flag ให้ front เช็คสำหรับแยกกลุ่มส่งเมลได้ง่ายขึ้น
+                'hasTraffic' => $status === 'มีผู้เข้าชม (ไม่มีการอัพเดทบล็อก)', 
                 'status' => $status,
                 'statusColor' => $statusColor,
             ];

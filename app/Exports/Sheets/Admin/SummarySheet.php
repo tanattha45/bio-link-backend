@@ -22,13 +22,17 @@ class SummarySheet implements FromCollection, WithHeadings, WithTitle, ShouldAut
     {
         $this->start = Carbon::parse($start)->startOfDay();
         $this->end = Carbon::parse($end)->endOfDay();
+        
+        // บังคับเด็ดขาด: ถ้าวันที่สิ้นสุด (end) มีค่ามากกว่า "วันนี้" ให้จับลดลงมาเท่ากับแค่ "วันนี้" 
+        $today = Carbon::today()->endOfDay();
+        if ($this->end->gt($today)) {
+            $this->end = $today;
+        }
     }
 
     public function collection()
     {
-        $diffInDays = $this->start->diffInDays($this->end) + 1;
-
-        // 1. ดึงข้อมูลดิบรายวัน (ยืมลอจิกมาจาก getTrafficChartData ของคุณเลยครับ)
+        // 1. ดึงข้อมูลดิบรายวัน (ใช้โค้ดเดิมของคุณทั้งหมด)
         $dailyViews = DB::table('analytics')
             ->select(DB::raw('DATE(created_at) as date'), DB::raw('COUNT(*) as count'))
             ->whereBetween('created_at', [$this->start, $this->end])
@@ -48,32 +52,35 @@ class SummarySheet implements FromCollection, WithHeadings, WithTitle, ShouldAut
             ->groupBy('date')->pluck('count', 'date');
 
         $dailySignups = User::select(DB::raw('DATE(created_at) as date'), DB::raw('COUNT(*) as count'))
+            ->where('role', '!=', 'admin') 
             ->whereBetween('created_at', [$this->start, $this->end])
-            ->groupBy('date')->pluck('count', 'date');
+            ->groupBy('date')
+            ->pluck('count', 'date');
 
         $dailyBlocks = DB::table('blocks')
             ->select(DB::raw('DATE(created_at) as date'), DB::raw('SUM(COALESCE(JSON_LENGTH(content_data), 0)) as count'))
             ->whereBetween('created_at', [$this->start, $this->end])
             ->groupBy('date')->pluck('count', 'date');
 
-        // 2. คำนวณฐานของ User เดิมที่มีอยู่ก่อนเริ่มวันที่ (เพื่อทำยอดสมาชิกสะสม)
-        $baseTotalUsers = User::where('created_at', '<', $this->start)->count();
+        // 2. คำนวณฐานของ User เดิม
+        $baseTotalUsers = User::where('role', '!=', 'admin')
+            ->where('created_at', '<', $this->start)
+            ->count();
         $runningTotalUsers = $baseTotalUsers;
 
         $rows = [];
 
-        // 3. วนลูปตามจำนวนวัน เพื่อจัดเรียงข้อมูลลงแต่ละแถว (Row) ของ Excel
-        for ($i = 0; $i < $diffInDays; $i++) {
-            $dateObj = $this->start->copy()->addDays($i);
-            $dateStr = $dateObj->format('Y-m-d');
+        // 3. ใช้ While Loop (เช็คตามวันที่จริง จะแม่นยำกว่าการบวกเลขจำนวนวัน diffInDays)
+        $currentDate = $this->start->copy();
+        
+        while ($currentDate->lte($this->end)) {
+            $dateStr = $currentDate->format('Y-m-d');
             
-            // คำนวณผู้สมัครใหม่วันนี้ เพื่อบวกสะสม
             $signupsToday = isset($dailySignups[$dateStr]) ? (int)$dailySignups[$dateStr] : 0;
             $runningTotalUsers += $signupsToday;
 
-            // นำข้อมูลยัดใส่ Array โดยเรียงคอลัมน์ให้ตรงกับ Headings
             $rows[] = [
-                'date'        => $dateObj->format('d/m/Y'), // แสดงผลเช่น 27/06/2026
+                'date'        => $currentDate->format('d/m/Y'),
                 'signups'     => $signupsToday,
                 'total_users' => $runningTotalUsers,
                 'views'       => isset($dailyViews[$dateStr]) ? (int)$dailyViews[$dateStr] : 0,
@@ -81,6 +88,9 @@ class SummarySheet implements FromCollection, WithHeadings, WithTitle, ShouldAut
                 'clicks'      => isset($dailyClicks[$dateStr]) ? (int)$dailyClicks[$dateStr] : 0,
                 'saves'       => isset($dailySaves[$dateStr]) ? (int)$dailySaves[$dateStr] : 0,
             ];
+
+            // ขยับตัวแปรบวกไปทีละ 1 วันจนกว่าจะถึง $this->end
+            $currentDate->addDay();
         }
 
         return collect($rows);

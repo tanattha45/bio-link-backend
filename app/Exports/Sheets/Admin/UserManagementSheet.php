@@ -11,6 +11,7 @@ use Maatwebsite\Excel\Concerns\ShouldAutoSize;
 use Maatwebsite\Excel\Concerns\WithEvents;
 use Maatwebsite\Excel\Events\AfterSheet;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
+use Carbon\Carbon;
 
 class UserManagementSheet implements FromQuery, WithHeadings, WithMapping, WithTitle, ShouldAutoSize, WithEvents
 {
@@ -19,8 +20,8 @@ class UserManagementSheet implements FromQuery, WithHeadings, WithMapping, WithT
 
     public function __construct($start, $end)
     {
-        $this->start = $start;
-        $this->end = $end;
+        $this->start = Carbon::parse($start)->startOfDay();
+        $this->end = Carbon::parse($end)->endOfDay();
     }
 
     public function query()
