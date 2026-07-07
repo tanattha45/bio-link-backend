@@ -113,58 +113,66 @@ class ProfileController extends Controller
         try {
             \App\Models\Profile::unguard();
 
-            $newUsername = $request->input('username', $username);
-            $user = \App\Models\User::where('username', $username)->first();
-            
-            if ($user) {
-                $user->username = $newUsername;
-                if ($request->has('display_name')) {
-                    $user->display_name = $request->input('display_name');
-                }
-                $user->save();
-            } else {
-                $user = \App\Models\User::create([
-                    'username' => $newUsername,
-                    'display_name' => $request->input('display_name') ?? $newUsername,
-                    'email' => $newUsername . '@example.com',
-                    'password' => bcrypt('password')
-                ]);
+            // 🌟 1. ยืนยันตัวตนจาก Token ล็อกอิน (หรือหาจากชื่อเดิมถ้าไม่มี Token)
+            $user = auth('sanctum')->user();
+            if (!$user) {
+                $user = \App\Models\User::where('username', $username)->first();
             }
 
-            $existingProfile = \App\Models\Profile::where('username', $username)->first();
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'error_from_backend' => 'ไม่พบข้อมูลผู้ใช้งานนี้ในระบบ'
+                ], 404);
+            }
 
-            // --- ส่วนจัดการรูปภาพ (ใช้ฟังก์ชัน resolveImageUrl ที่แก้ไขแล้ว) ---
+            $newUsername = $request->input('username', $user->username);
+
+            // 🌟 2. ถ้าเปลี่ยน Username เช็คก่อนว่ามีคนใช้ชื่อนี้ไปหรือยัง
+            if ($newUsername !== $user->username) {
+                $isExist = \App\Models\User::where('username', $newUsername)->exists();
+                if ($isExist) {
+                    return response()->json([
+                        'success' => false,
+                        'error_from_backend' => 'Username นี้มีผู้ใช้งานแล้ว กรุณาใช้ชื่ออื่น'
+                    ], 422); 
+                }
+                $user->username = $newUsername;
+            }
+
+            if ($request->has('display_name')) {
+                $user->display_name = $request->input('display_name');
+            }
+            $user->save();
+
+            // 🌟 3. ค้นหา Profile เดิมด้วย user_id (ชัวร์ 100% ว่าแก้ถูกคน แม้จะเปลี่ยนชื่อ)
+            $existingProfile = \App\Models\Profile::where('user_id', $user->id)->first();
+
+            // --- ส่วนจัดการรูปภาพ ---
             $avatarUrl = $this->resolveImageUrl($request, optional($existingProfile)->avatar_url, 'avatar', 'avatar_url', 'avatars', 400);
             $coverUrl = $this->resolveImageUrl($request, optional($existingProfile)->cover_url, 'cover', 'cover_url', 'covers', 1200);
             $bgImageUrl = $this->resolveImageUrl($request, optional($existingProfile)->bg_image_url, 'bg_image', 'bg_image_url', 'backgrounds', 1920);
 
             $existingColumns = \Illuminate\Support\Facades\Schema::getColumnListing('profiles');
 
-            
-            // ดักแปลงค่า true/false จาก React ให้เป็นตัวเลข 1/0 ชัวร์ๆ ก่อนเซฟ
             $rawShowSave = $request->input('showSaveContact', $request->input('show_save_contact', 1));
             $showSaveContact = filter_var($rawShowSave, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
 
             $incomingData = [
                 'user_id'           => $user->id,
                 'username'          => $newUsername, 
-                'display_name'      => $request->input('display_name', $request->input('name')), // รับชื่อโปรไฟล์หลัก
+                'display_name'      => $request->input('display_name', $request->input('name')),
                 'bio'               => $request->input('bio'),
                 'avatar_url'        => $avatarUrl, 
                 'cover_url'         => $coverUrl,
                 'bg_image_url'      => $bgImageUrl,
-                
-                // เอา $request->input('name') ออกจาก contact_name เพื่อไม่ให้ค่าชนกัน
                 'contact_name'      => $request->input('contactName', $request->input('contact_name')),
                 'contact_phone'     => $request->input('phone', $request->input('contact_phone')),
                 'contact_email'     => $request->input('email', $request->input('contact_email')),
                 'contact_company'   => $request->input('company', $request->input('contact_company')),
                 'contact_job_title' => $request->input('title', $request->input('contact_job_title')),
                 'contact_website'   => $request->input('website', $request->input('contact_website')),
-                
-                // ใช้ค่าที่เราแปลงเป็น 1/0 แล้ว
                 'show_save_contact' => $showSaveContact,
-                
                 'theme_config'      => $request->input('theme_config'),
             ];
 
@@ -179,8 +187,9 @@ class ProfileController extends Controller
                 }
             }
 
+            // 🌟 4. อัปเดต Profile โดยใช้ 'user_id' แทน 'username' ป้องกันการสร้างข้อมูลเบิ้ล
             $profile = \App\Models\Profile::updateOrCreate(
-                ['username' => $username], 
+                ['user_id' => $user->id], 
                 $dataToSave
             );
 
@@ -188,7 +197,7 @@ class ProfileController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'บันทึกข้อมูลและอัปโหลดรูปภาพสำเร็จเรียบร้อย!',
+                'message' => 'บันทึกข้อมูลสำเร็จเรียบร้อย!',
                 'data' => $profile
             ], 200);
 

@@ -24,7 +24,12 @@ class DailyOverviewSheet implements FromArray, WithHeadings, WithTitle, ShouldAu
 
     public function array(): array
     {
-        $days = $this->startDate->diffInDays($this->endDate) + 1;
+        // 1. กำหนดให้ endDate ไม่เกินวันปัจจุบัน (ถ้าเลือกช่วงเวลาครอบคลุมถึงอนาคต ให้ตัดทิ้ง)
+        $today = Carbon::now('Asia/Bangkok')->startOfDay();
+        $actualEndDate = $this->endDate->greaterThan($today) ? $today : $this->endDate;
+
+        // 2. คำนวณจำนวนวันใหม่โดยใช้ endDate ที่ถูกจำกัดแล้ว
+        $days = $this->startDate->diffInDays($actualEndDate) + 1;
         $data = [];
 
         $allViews = Analytic::where('profile_id', $this->profileId)
@@ -84,7 +89,8 @@ class DailyOverviewSheet implements FromArray, WithHeadings, WithTitle, ShouldAu
             
             $saves = $allSaves->filter(fn($s) => Carbon::parse($s->created_at)->setTimezone('Asia/Bangkok')->format('Y-m-d') === $date)->count();
             
-            $ctr = $views > 0 ? round(($clicks / $views) * 100, 1) . '%' : '0%';
+            $engagementRate = $views > 0 ? round((($clicks + $saves) / $views) * 100, 1) : 0;
+            $ctr = $engagementRate . '%';
 
             // =========================================================
             // 🌟 ลอจิกใหม่: หาลิงก์ยอดนิยมประจำวัน
