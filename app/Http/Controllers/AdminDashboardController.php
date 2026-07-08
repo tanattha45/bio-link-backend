@@ -557,6 +557,7 @@ class AdminDashboardController extends Controller
         return round((($curr - $prev) / $prev) * 100, 1);
     }
 
+    // Inactive Table
     private function getInactiveUsersData($minDays = 7)
     {
         $thresholdDate = now()->subDays((int)$minDays);
@@ -620,20 +621,20 @@ class AdminDashboardController extends Controller
         })->map(function ($user) use ($minDays) { 
             
             // 2. จัดการข้อมูลสำหรับคอลัมน์ "แก้ไขบล็อกล่าสุด"
+            // 2. จัดการข้อมูลสำหรับคอลัมน์ "แก้ไขบล็อกล่าสุด"
             if ($user->last_block_updated_at) {
                 $lastBlockUpdate = Carbon::parse($user->last_block_updated_at);
                 $dateDisplay = $lastBlockUpdate->translatedFormat('d M Y');
                 $daysInactive = (int) $lastBlockUpdate->diffInDays(now());
                 $daysDisplay = $daysInactive . ' วันที่แล้ว';
             } else {
-                // กรณีบัญชีนี้ยังไม่เคยสร้างบล็อกเลย (0 บล็อก)
                 $dateDisplay = 'ไม่มีข้อมูล';
                 $daysDisplay = '-';
             }
 
             $lastLinkActivity = $user->last_link_activity_at ? Carbon::parse($user->last_link_activity_at) : null;
 
-            // เช็กสถานะ (แก้ Bug hasTraffic ให้ตรงกับสถานะด้วย)
+            // เช็กสถานะ 
             $status = 'ไม่มีความเคลื่อนไหว';
             $statusColor = 'bg-red-500';
             
@@ -650,15 +651,23 @@ class AdminDashboardController extends Controller
                 $statusColor = 'bg-red-500';
             }
 
+            // 🛠️ เพิ่มการประกาศตัวแปรตรงนี้ ก่อน return!
+            $lastActiveMoment = $user->last_active_ts 
+                ? Carbon::createFromTimestamp($user->last_active_ts) 
+                : Carbon::parse($user->created_at);
+
             return [
                 'id' => $user->id,
                 'name' => $user->display_name,    
                 'handle' => '@' . $user->username, 
                 'links' => (int)$user->total_links_count,
                 
-                // 3. นำค่าที่ผ่านการจัดการแล้วไปแสดงผลแทนของเดิม
                 'date' => $dateDisplay, 
                 'daysAgo' => $daysDisplay,
+
+                // ตอนนี้ระบบจะรู้จัก $lastActiveMoment แล้วครับ
+                'lastLoginDate' => $lastActiveMoment->translatedFormat('d M Y'),
+                'lastLoginDaysAgo' => (int) $lastActiveMoment->diffInDays(now()) . ' วันที่แล้ว',
                 
                 'lastLinkActivity' => $lastLinkActivity ? $lastLinkActivity->translatedFormat('d M Y') : 'ไม่มีข้อมูลการใช้งาน',
                 'hasTraffic' => $status === 'มีผู้เข้าชม (ไม่มีการอัพเดทบล็อก)', 
@@ -666,6 +675,6 @@ class AdminDashboardController extends Controller
                 'statusColor' => $statusColor,
             ];
             
-        })->values(); 
+        })->values();
     }
 }
