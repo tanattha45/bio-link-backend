@@ -20,7 +20,7 @@ return [
     'allowed_methods' => ['*'],
 
     // เปลี่ยนจาก ['*'] เป็น URL ของ Frontend หน้าบ้านตรงๆ
-    'allowed_origins' => ['http://localhost:5173'],
+    'allowed_origins' => ['http://localhost:5173' , 'https://milink.swceservice.com' , 'http://milink.swceservice.com'],
 
     'allowed_origins_patterns' => [],
 
