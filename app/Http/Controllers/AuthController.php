@@ -143,6 +143,14 @@ class AuthController extends Controller
         } else {
             $user = User::where('username' , $request->username)->first();
         }
+
+        // เมื่อ admin กด banned ผู้ใช้จะไม่สามารถ login ได้
+        if ($user && $user->status === 'banned') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'บัญชีของคุณถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบทาง email : support@example.com'
+            ], 403); // 403 Forbidden
+        }
         
         // ตรวจสอบรหัสผ่าน และ บันทึกความผิดพลาด
         if (!$user || !Hash::check($request->password, $user->password)) {
@@ -343,6 +351,13 @@ class AuthController extends Controller
             else{
                 // อัปเดตฟิลด์ google_id ของผู้ใช้คนนั้นให้เป็นไอดีล่าสุดที่ได้มาจาก Google
                 $user->update(['google_id' => $googleUser->getID()]);
+            }
+
+            if ($user->status === 'banned') {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'บัญชีของคุณถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบทาง email : support@example.com'
+                ], 403);
             }
 
             // ออก Token ของระบบเราเองให้ React เอาไปใช้งาน
