@@ -143,6 +143,14 @@ class AuthController extends Controller
         } else {
             $user = User::where('username' , $request->username)->first();
         }
+
+        // เมื่อ admin กด banned ผู้ใช้จะไม่สามารถ login ได้
+        if ($user && $user->status === 'banned') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'บัญชีของคุณถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบทาง email : support@example.com'
+            ], 403); // 403 Forbidden
+        }
         
         // ตรวจสอบรหัสผ่าน และ บันทึกความผิดพลาด
         if (!$user || !Hash::check($request->password, $user->password)) {
@@ -345,6 +353,13 @@ class AuthController extends Controller
                 $user->update(['google_id' => $googleUser->getID()]);
             }
 
+            if ($user->status === 'banned') {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'บัญชีของคุณถูกระงับการใช้งาน กรุณาติดต่อผู้ดูแลระบบทาง email : support@example.com'
+                ], 403);
+            }
+
             // ออก Token ของระบบเราเองให้ React เอาไปใช้งาน
             $token = $user->createToken('auth_token')->plainTextToken;
 
@@ -384,11 +399,12 @@ class AuthController extends Controller
     }
 
     // ฟังก์ชันส่งอีเมลยืนยันอีกครั้ง
+    // ฟังก์ชันส่งอีเมลยืนยันอีกครั้ง (เวอร์ชันแก้ไขให้รองรับทั้ง Username และ Email)
     public function resendVerification(Request $request)
     {
-        // 1. ตรวจสอบข้อมูลอีเมลที่ส่งมาจากหน้าบ้าน
+        // 1. เปลี่ยนกฎจาก 'email' เป็น 'string' เพื่อให้ข้อความทั่วไป (เช่น username) ผ่านด่านแรกได้ก่อน
         $request->validate([
-            'email' => 'required|email'
+            'email' => 'required|string' 
         ]);
 
         // 2. ป้องกันการกดรัวๆ - ให้กดได้ 1 ครั้งต่อ 1 นาทีต่อ 1 IP
@@ -400,29 +416,31 @@ class AuthController extends Controller
                 'message' => "กรุณารออีก {$seconds} วินาทีก่อนที่จะกดส่งอีเมลใหม่อีกครั้ง"
             ], 429);
         }
-        RateLimiter::hit($throttleKey, 60); // บันทึกการกด และจำกัดเวลา 60 วินาที
+        RateLimiter::hit($throttleKey, 60); 
 
-        // 3. ค้นหาผู้ใช้
-        $user = User::where('email', $request->email)->first();
+        // 3. ค้นหาผู้ใช้: แก้ไขให้ค้นหาจาก 'email' ก็ได้ หรือ 'username' ก็ได้
+        $input = $request->input('email');
+        $user = User::where('email', $input)
+                    ->orWhere('username', $input)
+                    ->first();
 
+        // ถ้าหาไม่เจอทั้งสองคอลัมน์ ค่อยส่งข้อความบอกว่าไม่พบผู้ใช้
         if (!$user) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'ไม่พบอีเมลนี้ในระบบ'
+                'message' => 'ไม่พบข้อมูลผู้ใช้งานหรืออีเมลนี้ในระบบ'
             ], 404);
         }
 
         // 4. ถ้าอีเมลนี้ยืนยันไปแล้ว ไม่ต้องส่งซ้ำ
-        if ($user->hasVerifiedEmail()) { // หรือใช้ is_null($user->email_verified_at) == false
+        if ($user->hasVerifiedEmail()) { 
             return response()->json([
                 'status' => 'error',
                 'message' => 'อีเมลนี้ได้รับการยืนยันเรียบร้อยแล้ว สามารถเข้าสู่ระบบได้เลยค่ะ'
             ], 400);
         }
 
-        // 5. สร้าง Signed URL ใหม่ 
-
-        // ระบบจะไปหา expire ใน config/auth.php ก่อนหากหาไม่เจอถึงจะมาหยิบตัวเลข
+        // 5. สร้าง Signed URL ใหม่ (ใช้ $user->email ที่ดึงมาจากฐานข้อมูลได้เลยอัตโนมัติ)
         $expireMinutes = config('auth.verification.expire', 60);
 
         $temporaryVerificationUrl = URL::temporarySignedRoute(
@@ -430,11 +448,11 @@ class AuthController extends Controller
             now()->addMinutes($expireMinutes), 
             [
                 'id' => $user->id, 
-                'hash' => sha1($user->email)
+                'hash' => sha1($user->email) // ดึงเมลจริงจาก db มาทำ hash ปลอดภัยแน่นอน
             ]
         );
 
-        // 6. ส่งอีเมลเข้า Queue
+        // 6. ส่งอีเมลเข้า Queue ไปยังอีเมลจริงของผู้ใช้คนนั้น
         Mail::to($user->email)->queue(new VerifyEmailMail($temporaryVerificationUrl));
 
         return response()->json([

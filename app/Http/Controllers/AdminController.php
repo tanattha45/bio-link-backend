@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Mail;
+use App\Mail\UserBannedMail;
 
 class AdminController extends Controller
 {
@@ -69,8 +71,17 @@ class AdminController extends Controller
                 return response()->json(['status' => 'error', 'message' => 'ไม่พบผู้ใช้งานรายนี้'], 404);
             }
 
-            // 3. สลับสถานะ
-            $user->status = ($user->status === 'active') ? 'banned' : 'active';
+            // 3. สลับสถานะและจัดการ Token
+            if ($user->status === 'active') {
+                $user->status = 'banned';
+                Mail::to($user->email)->queue(new UserBannedMail($user));
+                
+                // ลบ Token ทั้งหมดของ User คนนี้ เพื่อเตะออกจากระบบทันที
+                $user->tokens()->delete(); 
+            } else {
+                $user->status = 'active';
+            }
+            
             $user->save();
 
             return response()->json(['status' => 'success', 'message' => 'อัปเดตสถานะเรียบร้อย']);
