@@ -27,9 +27,9 @@ class BlockController extends Controller
         // ตรวจสอบความถูกต้องของข้อมูล 
         // บังคับให้ content_data ต้องเป็น Array เพื่อให้ Laravel แปลงเป็น JSON ได้สมบูรณ์
         $validated = $request->validate([
-            'type' => 'required|string|in:LINK,IMAGE,VIDEO,SLIDER,SHOP',
-            'title' => 'nullable|string|max:255',
-            'content_data' => 'nullable|array' 
+        'type' => 'required|string|in:LINK,IMAGE,VIDEO,SLIDER,SHOP,GRID2,GRID3,Grid2,Grid3',
+        'title' => 'nullable|string|max:255',
+        'content_data' => 'nullable|array' 
         ]);
 
         $cleanContentData = $this->processImages($validated['content_data'] ?? []);
@@ -37,7 +37,7 @@ class BlockController extends Controller
         // บันทึกข้อมูลบล็อกลงฐานข้อมูล
         $block = Block::create([
             'profile_id' => $user->profile->id, 
-            'type' => $validated['type'], 
+            'type' => strtoupper($validated['type']), 
             'title' => $validated['title'],
             'content_data' => $cleanContentData, // ถ้าไม่มีข้อมูลส่งมา ให้ใส่เป็น Array ว่างรอไว้
             'is_visible' => true,

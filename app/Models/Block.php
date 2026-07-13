@@ -39,19 +39,22 @@ class Block extends Model
 
     public function getIconAttribute()
     {
-        // 1. ถ้ามี icon เซ็ตมาแล้วใน content_data ให้ยึดตามนั้น
         if (is_array($this->content_data) && isset($this->content_data['icon'])) {
             return $this->content_data['icon'];
         }
         
-        // 2. ถ้าไม่มี แปลงจาก type (เผื่อการดึงข้อมูลเก่า)
         $typeMap = [
             'YOUTUBE' => 'Youtube',
             'TIKTOK'  => 'TikTok',
             'IMAGE'   => 'Image',
             'SHOP'    => 'Shop',
-            'LINK'    => 'Link'
+            'LINK'    => 'Link',
+            
+            'GRID2'   => 'Grid2',
+            'GRID3'   => 'Grid3',
+            'SLIDER'  => 'Slider',
         ];
+        
         return $typeMap[strtoupper($this->type)] ?? 'Link';
     }
 
