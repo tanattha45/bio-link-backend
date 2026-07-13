@@ -18,6 +18,13 @@ class AnalyticsController extends Controller
     public function track(Request $request, $username)
     {
         \Illuminate\Support\Facades\Log::info('🎯 [เช็คคลิก SLIDER] หน้าบ้านส่งอะไรมา:', $request->all());
+        // นุชมาเพิ่มในส่วนนี้ 
+        if ($request->input('source') === 'admin' || $request->query('source') === 'admin') {
+            return response()->json([
+                'success' => true, 
+                'message' => 'Admin preview (not recorded)'
+            ]);
+        }
         try {
             $profile = Profile::where('username', $username)->first();
             

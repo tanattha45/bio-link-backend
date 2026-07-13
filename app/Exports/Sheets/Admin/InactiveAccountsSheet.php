@@ -91,19 +91,22 @@ class InactiveAccountsSheet implements FromCollection, WithHeadings, WithTitle, 
                 ? Carbon::createFromTimestamp($account->last_active_ts) 
                 : Carbon::parse($account->created_at);
             
+            // ดึงวันที่ออกมาเป็นข้อความ (เช่น 01 Jul 2026)
             $lastLoginDateText = $lastActiveMoment->format('d M Y');
-            $lastLoginDaysAgo = (int) $lastActiveMoment->diffInDays($today);
+            
+            // ใช้ copy() เพื่อโคลนค่าก่อนรีเซ็ตเวลาเป็น 00:00:00 จะได้ไม่กระทบตัวแปรต้นฉบับ
+            $lastLoginDaysAgo = (int) $lastActiveMoment->copy()->startOfDay()->diffInDays($today);
             $lastLoginDaysAgoText = $lastLoginDaysAgo . ' วันที่แล้ว';
 
             // 2. คำนวณข้อมูล แก้ไขบล็อกล่าสุด
             if ($account->last_block_updated_at) {
                 $lastBlockUpdate = Carbon::parse($account->last_block_updated_at);
                 $lastUpdateText = $lastBlockUpdate->format('d M Y');
-                $daysAgo = (int) $lastBlockUpdate->diffInDays($today);
+                $daysAgo = (int) $lastBlockUpdate->startOfDay()->diffInDays($today);
                 $daysAgoText = $daysAgo . ' วันที่แล้ว';
             } else {
                 $lastUpdateText = 'ไม่มีข้อมูล';
-                $daysAgo = (int) Carbon::parse($account->created_at)->diffInDays($today); 
+                $daysAgo = (int) Carbon::parse($account->created_at)->startOfDay()->diffInDays($today); 
                 $daysAgoText = '-';
             }
 

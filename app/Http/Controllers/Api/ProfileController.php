@@ -51,15 +51,29 @@ class ProfileController extends Controller
     ], 200);
 }
 
+
+    // นุชเพิ่มเงื่อนไขเรื่องการ banned ตรงนี้น้า
     // ดึงข้อมูลสำหรับหน้าสาธารณะ (ไม่ต้อง Login)
-    public function showPublic($username)
+    public function showPublic(Request $request, $username)
     {
-        $profile = Profile::with('blocks')->where('username', $username)->first();
+        $profile = Profile::with(['blocks', 'user'])->where('username', $username)->first();
 
         if (!$profile) {
             return response()->json([
                 'message' => 'ไม่พบข้อมูล Profile ของผู้ใช้นี้'
             ], 404);
+        }
+
+        if ($profile->user && $profile->user->status === 'banned') {
+            // ถ้าแอดมินกดเข้ามาดู (มี source=admin) ปล่อยผ่านให้ดูได้
+            if ($request->query('source') === 'admin') {
+                // do nothing ปล่อยผ่าน
+            } else {
+                // ถ้าคนทั่วไปกดเข้ามาดู ให้เตะออกด้วย 403
+                return response()->json([
+                    'message' => 'บัญชีถูกระงับการใช้งาน ไม่สามารถแสดงผลได้'
+                ], 403);
+            }
         }
 
         return new ProfileResource($profile);
