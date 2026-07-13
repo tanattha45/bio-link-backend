@@ -24,15 +24,32 @@ class ProfileController extends Controller
 
     // อัปเดตข้อมูล (ต้อง Login)
     public function update(UpdateProfileRequest $request)
-    {
-        $profile = $request->user()->profile;
-        $profile->update($request->validated());
+{
+    $user = $request->user();
+    $profile = $user->profile;
+    
+    // ดึงค่าที่ผ่านการ Validate มาแล้ว
+    $data = $request->validated();
+
+    // 🌟 เช็คว่ามีการส่งไฟล์ 'avatar' มาไหม
+    if ($request->hasFile('avatar')) {
+        // ลบรูปเก่าก่อน (ถ้ามี)
+        if ($profile->avatar_url) {
+            Storage::disk('public')->delete($profile->avatar_url);
+        }
         
-        return response()->json([
-            'message' => 'Profile updated successfully',
-            'data' => new ProfileResource($profile)
-        ], 200);
+        // อัปโหลดไฟล์ใหม่ไปเก็บใน storage/app/public/profiles
+        $path = $request->file('avatar')->store('profiles', 'public');
+        $data['avatar_url'] = $path; // บันทึกเฉพาะ path ลง DB
     }
+
+    $profile->update($data);
+    
+    return response()->json([
+        'message' => 'Profile updated successfully',
+        'data' => new ProfileResource($profile)
+    ], 200);
+}
 
 
     // นุชเพิ่มเงื่อนไขเรื่องการ banned ตรงนี้น้า
