@@ -63,6 +63,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/blocks/{id}', [BlockController::class, 'show']);
     Route::put('/blocks/{id}', [BlockController::class, 'update']);
     Route::delete('/blocks/{id}', [BlockController::class, 'destroy']);
+    Route::get('/resolve-tiktok', [BlockController::class, 'resolveTikTokUrl']);
     
     // --- User Profile ---
     Route::get('/user/profile', [ProfileController::class, 'showMyProfile']);

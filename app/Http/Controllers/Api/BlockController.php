@@ -8,6 +8,8 @@ use App\Models\Block;
 use Illuminate\Support\Facades\Storage; // สำหรับจัดการไฟล์
 use Illuminate\Support\Str; // สำหรับสุ่มชื่อไฟล์
 
+use Illuminate\Support\Facades\Http;
+
 class BlockController extends Controller
 {
     // ฟังก์ชันสร้างข้อมูลใหม่ (POST)
@@ -227,5 +229,37 @@ class BlockController extends Controller
         }
         
         return $cleanContentData;
+    }
+
+    public function resolveTikTokUrl(Request $request)
+    {
+        $url = $request->query('url');
+
+        if (!$url) {
+            return response()->json(['error' => 'URL is required'], 400);
+        }
+
+        try {
+            // ใช้ Http facade ของ Laravel ในการตามลิงก์ Redirect
+            // เพิ่ม User-Agent ปลอมตัวเป็นเบราว์เซอร์ปกติ ป้องกัน TikTok บล็อก Request
+            $response = Http::withHeaders([
+                'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            ])->get($url);
+
+            // ดึง URL สุดท้ายหลังจากระบบ Follow Redirect แล้ว
+            $finalUrl = (string) $response->effectiveUri();
+
+            return response()->json([
+                'status' => 'success',
+                'fullUrl' => $finalUrl
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'status' => 'error',
+                'error' => 'Cannot resolve URL', 
+                'details' => $e->getMessage()
+            ], 500);
+        }
     }
 }
