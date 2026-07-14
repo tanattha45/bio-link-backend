@@ -54,6 +54,8 @@ Route::get('/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])
 
 Route::post('/admin/export-report', [ExportController::class, 'exportReport']);
 
+Route::get('/resolve-tiktok', [BlockController::class, 'resolveTikTokUrl']);
+
 //  Protected Routes (ต้องส่ง Bearer Token)
 Route::middleware('auth:sanctum')->group(function () {
     
@@ -63,7 +65,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/blocks/{id}', [BlockController::class, 'show']);
     Route::put('/blocks/{id}', [BlockController::class, 'update']);
     Route::delete('/blocks/{id}', [BlockController::class, 'destroy']);
-    Route::get('/resolve-tiktok', [BlockController::class, 'resolveTikTokUrl']);
     
     // --- User Profile ---
     Route::get('/user/profile', [ProfileController::class, 'showMyProfile']);
