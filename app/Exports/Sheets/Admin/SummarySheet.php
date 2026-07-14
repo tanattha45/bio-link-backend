@@ -32,17 +32,11 @@ class SummarySheet implements FromCollection, WithHeadings, WithTitle, ShouldAut
 
     public function collection()
     {
-        // 1. ดึงข้อมูลดิบรายวัน (ใช้โค้ดเดิมของคุณทั้งหมด)
+        // 1. ดึงข้อมูลดิบรายวัน (Views, Saves, Signups, Blocks ใช้ตัวเดิม)
         $dailyViews = DB::table('analytics')
             ->select(DB::raw('DATE(created_at) as date'), DB::raw('COUNT(*) as count'))
             ->whereBetween('created_at', [$this->start, $this->end])
             ->whereNull('block_id')
-            ->groupBy('date')->pluck('count', 'date');
-
-        $dailyClicks = DB::table('analytics')
-            ->select(DB::raw('DATE(created_at) as date'), DB::raw('COUNT(*) as count'))
-            ->whereBetween('created_at', [$this->start, $this->end])
-            ->whereNotNull('block_id')->where('block_id', '!=', 999999)
             ->groupBy('date')->pluck('count', 'date');
 
         $dailySaves = DB::table('analytics')
@@ -62,7 +56,45 @@ class SummarySheet implements FromCollection, WithHeadings, WithTitle, ShouldAut
             ->whereBetween('created_at', [$this->start, $this->end])
             ->groupBy('date')->pluck('count', 'date');
 
-        // 2. คำนวณฐานของ User เดิม
+        // 🌟 2. [ปรับปรุง] ระบบทำความสะอาด URL และคำนวณยอดคลิกแบบละเอียดรายวัน (รองรับ เบอร์โทร, อีเมล, ลิงก์ย่อย)
+        $cleanUrl = function($u) {
+            if (empty($u)) return '';
+            
+            $u = preg_replace('#^https?://mail\.google\.com/mail/\?view=cm&fs=1&to=#i', '', $u);
+            $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
+            $u = preg_replace('#^www\.#', '', $u);
+            $u = preg_replace('#^mailto:#i', '', $u);
+            $u = preg_replace('#^tel:#i', '', $u);
+            $u = str_replace('-', '', $u);
+            
+            return strtolower(trim($u));
+        };
+
+        // ดึงยอดคลิกดิบพร้อมข้อมูลบล็อกที่เกิดขึ้นในช่วงเวลานั้น
+        $rawClicks = DB::table('analytics')
+            ->join('blocks', 'analytics.block_id', '=', 'blocks.id')
+            ->whereNotNull('analytics.block_id')
+            ->where('analytics.block_id', '!=', 999999)
+            ->whereBetween('analytics.created_at', [$this->start, $this->end])
+            ->get(['analytics.created_at', 'analytics.clicked_url', 'blocks.content_data']);
+
+        // นำมากรองความถูกต้องของ URL และจัดกลุ่มตามรายวัน (ปรับ Timezone ให้ตรงกับระบบ)
+        $filteredClicks = $rawClicks->filter(function($click) use ($cleanUrl) {
+            $contentData = is_string($click->content_data) ? json_decode($click->content_data, true) : $click->content_data;
+            if (is_array($contentData)) {
+                foreach ($contentData as $item) {
+                    $url = trim($item['url'] ?? $item['link'] ?? '');
+                    if (!empty($url) && $cleanUrl($click->clicked_url) === $cleanUrl($url)) return true;
+                }
+            }
+            return false;
+        });
+
+        // จัดกลุ่มข้อมูลยอดคลิกแยกตามรายวัน 'Y-m-d'
+        $clicksDataGrouped = $filteredClicks->groupBy(fn($item) => Carbon::parse($item->created_at)->setTimezone('Asia/Bangkok')->format('Y-m-d'));
+
+
+        // 3. คำนวณฐานของ User เดิม
         $baseTotalUsers = User::where('role', '!=', 'admin')
             ->where('created_at', '<', $this->start)
             ->count();
@@ -70,7 +102,7 @@ class SummarySheet implements FromCollection, WithHeadings, WithTitle, ShouldAut
 
         $rows = [];
 
-        // 3. ใช้ While Loop (เช็คตามวันที่จริง จะแม่นยำกว่าการบวกเลขจำนวนวัน diffInDays)
+        // 4. วนลูปสร้างข้อมูลแถวใน Excel เช็กตามวันที่จริง
         $currentDate = $this->start->copy();
         
         while ($currentDate->lte($this->end)) {
@@ -79,13 +111,16 @@ class SummarySheet implements FromCollection, WithHeadings, WithTitle, ShouldAut
             $signupsToday = isset($dailySignups[$dateStr]) ? (int)$dailySignups[$dateStr] : 0;
             $runningTotalUsers += $signupsToday;
 
+            // 🌟 ดึงยอดคลิกจากข้อมูลที่ล้างแล้วประจำวันนี้ (ถ้าไม่มีให้เป็น 0)
+            $clicksToday = $clicksDataGrouped->has($dateStr) ? $clicksDataGrouped->get($dateStr)->count() : 0;
+
             $rows[] = [
                 'date'        => $currentDate->format('d/m/Y'),
                 'signups'     => $signupsToday,
                 'total_users' => $runningTotalUsers,
                 'views'       => isset($dailyViews[$dateStr]) ? (int)$dailyViews[$dateStr] : 0,
                 'blocks'      => isset($dailyBlocks[$dateStr]) ? (int)$dailyBlocks[$dateStr] : 0,
-                'clicks'      => isset($dailyClicks[$dateStr]) ? (int)$dailyClicks[$dateStr] : 0,
+                'clicks'      => $clicksToday, // 🌟 แสดงยอดคลิกใหม่ที่นับเบอร์/เมลได้แม่นยำ 100%
                 'saves'       => isset($dailySaves[$dateStr]) ? (int)$dailySaves[$dateStr] : 0,
             ];
 

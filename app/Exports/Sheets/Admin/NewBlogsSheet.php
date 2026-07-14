@@ -25,10 +25,12 @@ class NewBlogsSheet implements FromCollection, WithHeadings, WithTitle, ShouldAu
 
     public function collection()
     {
-        // 1. ดึงบล็อกทั้งหมดในช่วงเวลาที่กำหนด
+        // 🌟 1. ดึงบล็อกทั้งหมดในช่วงเวลาที่กำหนด (เพิ่มการ Join ตาราง users เพื่อกรอง Admin ออกให้ตรงกับ Sheet อื่น)
         $blocks = DB::table('blocks')
             ->join('profiles', 'blocks.profile_id', '=', 'profiles.id')
+            ->join('users', 'profiles.user_id', '=', 'users.id')
             ->select('blocks.*', 'profiles.user_id as author_id', 'profiles.username')
+            ->where('users.role', '!=', 'admin') // 🎯 ตัดผู้ใช้งานที่เป็น Admin ออก
             ->whereBetween('blocks.created_at', [$this->start, $this->end])
             ->get();
 
@@ -36,9 +38,9 @@ class NewBlogsSheet implements FromCollection, WithHeadings, WithTitle, ShouldAu
         return $blocks->flatMap(function ($block) {
             
             // จัดฟอร์แมตวันที่ให้สวยงาม
-            $createdAt = Carbon::parse($block->created_at)->format('Y-m-d H:i:s');
+            $createdAt = Carbon::parse($block->created_at)->setTimezone('Asia/Bangkok')->format('Y-m-d H:i:s');
             $status = $block->is_visible ? 'Visible' : 'Hidden';
-            $author = $block->username ;
+            $author = $block->username;
 
             $contents = [];
             if (!empty($block->content_data)) {
@@ -48,8 +50,8 @@ class NewBlogsSheet implements FromCollection, WithHeadings, WithTitle, ShouldAu
                 }
             }
             
-            // กรณีที่ 1: ถ้าบล็อกนี้ไม่มีลิงก์ย่อยด้านใน (เช่น TEXT หรือ HEADER)
-            if (empty($contents)) {
+            // 🌟 กรณีที่ 1: ถ้าบล็อกนี้ไม่มีลิงก์ย่อยด้านใน หรือไม่ใช่ข้อมูลประเภท Array (เช่น TEXT, HEADER)
+            if (empty($contents) || !is_array($contents)) {
                 return [[
                     'created_at'   => $createdAt,
                     'block_id'     => $block->id,
@@ -58,14 +60,16 @@ class NewBlogsSheet implements FromCollection, WithHeadings, WithTitle, ShouldAu
                     'type'         => $block->type,
                     'title'        => $block->title ?? '-',
                     'content_name' => '-', // ไม่มีชื่อย่อย
-                    'content_link' => '-'  // ไม่มีลิงก์ย่อย
+                    'content_link' => $block->url ?? '-'  // ใช้ค่าลิ้งค์หลักของบล็อกถ้ามี
                 ]];
             }
 
-            // กรณีที่ 2: ถ้าบล็อกนี้มีหลายลิงก์ (เช่น SHOP, SLIDER, SOCIAL) ให้วนลูปแตกแถว
+            // 🌟 กรณีที่ 2: ถ้าบล็อกนี้มีหลายลิงก์ (เช่น SHOP, SLIDER, SOCIAL, LINK) ให้วนลูปแตกแถว
             return collect($contents)->map(function ($item) use ($block, $createdAt, $author, $status) {
                 $name = $item['name'] ?? $item['title'] ?? '-';
-                $linkOrImage = $item['url'] ?? $item['link'] ?? $item['image'] ?? $item['imageUrl'] ?? '-';
+                
+                // 🎯 ดึง url/link ครอบคลุมไปถึงเบอร์โทรศัพท์ อีเมล หรือรูปภาพของสินค้าชิ้นย่อยนั้นๆ
+                $linkOrAddress = $item['url'] ?? $item['link'] ?? $item['image'] ?? $item['imageUrl'] ?? '-';
 
                 return [
                     'created_at'   => $createdAt,
@@ -75,7 +79,7 @@ class NewBlogsSheet implements FromCollection, WithHeadings, WithTitle, ShouldAu
                     'type'         => $block->type,
                     'title'        => $block->title ?? '-',
                     'content_name' => $name,
-                    'content_link' => $linkOrImage,
+                    'content_link' => trim($linkOrAddress),
                 ];
             });
         });
