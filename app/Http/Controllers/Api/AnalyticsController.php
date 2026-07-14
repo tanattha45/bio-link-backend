@@ -194,8 +194,14 @@ class AnalyticsController extends Controller
         
         $tempCleanUrl = function($u) {
             if (empty($u)) return '';
+            
+            $u = preg_replace('#^https?://mail\.google\.com/mail/\?view=cm&fs=1&to=#i', '', $u);
             $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
             $u = preg_replace('#^www\.#', '', $u);
+            $u = preg_replace('#^mailto:#i', '', $u);
+            $u = preg_replace('#^tel:#i', '', $u);
+            $u = str_replace('-', '', $u); 
+            
             return strtolower(trim($u));
         };
 
@@ -262,9 +268,14 @@ class AnalyticsController extends Controller
         // 🌟 ฟังก์ชันทำความสะอาด URL ฝั่งหลังบ้าน (พระเอกของงานนี้)
         $cleanUrl = function($u) {
             if (empty($u)) return '';
-            // ตัด https://, http://, www. และ / ตัวท้ายสุดออกให้หมด
+            
+            $u = preg_replace('#^https?://mail\.google\.com/mail/\?view=cm&fs=1&to=#i', '', $u);
             $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
             $u = preg_replace('#^www\.#', '', $u);
+            $u = preg_replace('#^mailto:#i', '', $u);
+            $u = preg_replace('#^tel:#i', '', $u);
+            $u = str_replace('-', '', $u);
+            
             return strtolower(trim($u));
         };
 

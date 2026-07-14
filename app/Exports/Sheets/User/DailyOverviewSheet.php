@@ -50,8 +50,17 @@ class DailyOverviewSheet implements FromArray, WithHeadings, WithTitle, ShouldAu
 
         $cleanUrl = function($u) {
             if (empty($u)) return '';
+            
+            // ตัดลิงก์เว็บ Gmail
+            $u = preg_replace('#^https?://mail\.google\.com/mail/\?view=cm&fs=1&to=#i', '', $u);
+            
+            // ตัดส่วนหัวอื่นๆ และขีดกลาง
             $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
             $u = preg_replace('#^www\.#', '', $u);
+            $u = preg_replace('#^mailto:#i', '', $u);
+            $u = preg_replace('#^tel:#i', '', $u);
+            $u = str_replace('-', '', $u);
+            
             return strtolower(trim($u));
         };
 
