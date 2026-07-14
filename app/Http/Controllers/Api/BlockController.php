@@ -96,7 +96,10 @@ class BlockController extends Controller
                 $cleanContentData = $this->processImages($request->input('content_data'), $oldContentData);
                 $block->content_data = $cleanContentData;
             }
-
+            
+            if ($request->has('display_order')) {
+                $block->display_order = $request->input('display_order');
+            }
             $block->save();
 
             return response()->json([
