@@ -172,11 +172,6 @@ class AdminDashboardController extends Controller
             ->count();
 
         // 5. ดึงข้อมูล "บล็อกทั้งหมด"
-        // JSON_LENGTH เป็นตัวถามใน content data ว่าในนั้นมีอยู่กี่รายการ
-        //  DB::table ให้ไปดูในตาราง blocks 
-        // ถ้าเราใช้ count จะนับเป้นแถวแต่เราต้องการนับลึกลงไปอีกจึงใช้ sum(JSON_LENGTH(...)) แทน
-        // $prevStart, $prevEnd = ใช้ดึงข้อมูลย้อนหลังมาเทียบ เพื่อคำนวณ % เพิ่มขึ้นหรือลดลง
-        // $start, $end = ใช้ดึงข้อมูลที่จะแสดงให้ Admin เห็น
         $currentBlocks = DB::table('blocks')
             ->whereBetween('created_at', [$start, $end])
             ->sum(DB::raw('COALESCE(JSON_LENGTH(content_data), 0)')) ?? 0;
@@ -185,17 +180,17 @@ class AdminDashboardController extends Controller
             ->whereBetween('created_at', [$prevStart, $prevEnd])
             ->sum(DB::raw('COALESCE(JSON_LENGTH(content_data), 0)')) ?? 0;
 
-        // 6. ดึงข้อมูล "ยอดคลิกรวม" (ไม่นับ Save Contact)
-        // เอาคอลัมน์ block_id มาใช้โดยค่าในคอลัมน์นี้ต้อง ไม่เป็น NULL เพราะ คือการเข้าชมโปนไฟล์ไม่ใช่การคลิ๊ก
-        // block_id', '!=', 999999 คือ เลือกเฉพาะข้อมูลที่ block_id ไม่เท่ากับ 999999 เพราะ มันคือ save contact
-        
-        // 💡 [จุดแก้ไขสำหรับคำนวณยอดคลิกแบบ In-Memory]:
-        // ดึงข้อมูลออกมาล้างโครงสร้าง URL และคัดกรองลิงก์ย่อยที่อยู่ในอาเรย์ JSON ผ่าน Collection แทนคำสั่งฐานข้อมูล SQL
-        // เพื่อลบลิงก์ที่ถูกผู้ใช้ลบออกไปแล้ว และไม่ให้ติดบั๊กเครื่องหมายสแลชจนกลายเป็น 0 หรือ Error 500 คอลัมน์ blocks.url ครับ
+        // 🌟 6. [ปรับปรุงตัวทำความสะอาด URL ให้แม่นยำ 100% ครอบคลุมเบอร์โทรศัพท์และอีเมล]
         $cleanUrl = function($u) {
             if (empty($u)) return '';
+            
+            $u = preg_replace('#^https?://mail\.google\.com/mail/\?view=cm&fs=1&to=#i', '', $u);
             $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
             $u = preg_replace('#^www\.#', '', $u);
+            $u = preg_replace('#^mailto:#i', '', $u);
+            $u = preg_replace('#^tel:#i', '', $u);
+            $u = str_replace('-', '', $u);
+            
             return strtolower(trim($u));
         };
 
@@ -248,7 +243,7 @@ class AdminDashboardController extends Controller
 
         // ดึงข้อมูล "ยอดเข้าชมโปรไฟล์รวม" (Profile Views)
         $currentViews = DB::table('analytics')
-            ->whereNull('block_id') // กรองเอาเฉพาะยอดวิว
+            ->whereNull('block_id') 
             ->whereBetween('created_at', [$start, $end])
             ->count();
             
@@ -290,20 +285,23 @@ class AdminDashboardController extends Controller
     // เตรียมข้อมูลให้กราฟ (Traffic Chart)
     private function getTrafficChartData($start, $end, $diffInDays)
     {
-        // 7. ดึงข้อมูลสำหรับกราฟ (Traffic Chart)
-        // 7.1 ดึงข้อมูลรายวันของแต่ละสถิติ (ใช้ pluck เพื่อจัดให้อยู่ในรูป ['Y-m-d' => count])
         // นับยอด View แยกตามวัน
         $dailyViews = DB::table('analytics')
             ->select(DB::raw('DATE(created_at) as date'), DB::raw('COUNT(*) as count'))
             ->whereBetween('created_at', [$start, $end])->whereNull('block_id')
             ->groupBy('date')->pluck('count', 'date');
 
-        // 💡 [จุดแก้ไขสำหรับคำนวณยอดคลิกฝั่งกราฟรายวัน]:
-        // ล้างรูปแบบคิวรี่ตาราง blocks.url ออกเพื่อปิดบั๊ก Error 500 และจับกลุ่มตัวเลขสถิติให้ถูกต้องตรงกับการ์ดรวมด้านบนครับ
+        // 🌟 7.1 [ปรับปรุงตัวทำความสะอาด URL ของฝั่งกราฟรายวันให้แม่นยำเหมือนกัน]
         $cleanUrl = function($u) {
             if (empty($u)) return '';
+            
+            $u = preg_replace('#^https?://mail\.google\.com/mail/\?view=cm&fs=1&to=#i', '', $u);
             $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
             $u = preg_replace('#^www\.#', '', $u);
+            $u = preg_replace('#^mailto:#i', '', $u);
+            $u = preg_replace('#^tel:#i', '', $u);
+            $u = str_replace('-', '', $u);
+            
             return strtolower(trim($u));
         };
 
@@ -332,7 +330,7 @@ class AdminDashboardController extends Controller
             ->whereBetween('created_at', [$start, $end])->where('block_id', 999999)
             ->groupBy('date')->pluck('count', 'date');
 
-        // ดึงข้อมูลยอดสมัครรายวัน (เพิ่มเงื่อนไขตัด admin ออก)
+        // ดึงข้อมูลยอดสมัครรายวัน
         $dailySignups = User::where('role', '!=', 'admin')
             ->select(DB::raw('DATE(created_at) as date'), DB::raw('COUNT(*) as count'))
             ->whereBetween('created_at', [$start, $end])
@@ -343,7 +341,7 @@ class AdminDashboardController extends Controller
             ->whereBetween('created_at', [$start, $end])
             ->groupBy('date')->pluck('count', 'date');
 
-        // 7.2 คำนวณฐานของ User เดิมที่มีอยู่ก่อนเริ่มวันที่ startDate (เพื่อทำกราฟสมาชิกสะสม)
+        // คำนวณฐานของ User เดิมที่มีอยู่ก่อนเริ่มวันที่ startDate
         $baseTotalUsers = User::where('role', '!=', 'admin')
             ->where('created_at', '<', $start)
             ->count();
@@ -358,13 +356,12 @@ class AdminDashboardController extends Controller
 
         $chartData = [];
         
-        // 7.3 วนลูปจับคู่ข้อมูลใส่วันที่
+        // วนลูปจับคู่ข้อมูลใส่วันที่
         for ($i = 0; $i < $diffInDays; $i++) {
             $dateObj = $start->copy()->addDays($i);
             $dateStr = $dateObj->format('Y-m-d');
             $formattedDate = $dateObj->format('j') . ' ' . $thaiMonths[(int)$dateObj->format('n')]; 
             
-            // คำนวณผู้สมัครใหม่วันนี้ เพื่อเอาไปบวกสะสมเป็นสมาชิกทั้งหมด
             $signupsToday = isset($dailySignups[$dateStr]) ? (int)$dailySignups[$dateStr] : 0;
             $runningTotalUsers += $signupsToday;
 
@@ -400,7 +397,7 @@ class AdminDashboardController extends Controller
                 // 2. Views รอบก่อนหน้า
                 DB::raw("COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$prevStart}' AND '{$prevEnd}' THEN 1 END) as prev_views"),
                 
-                // 3. Clicks รอบปัจจุบัน (อันนี้คือยอดดิบ เราจะดึงมาเผื่อเรียงลำดับคร่าวๆ ก่อน)
+                // 3. Clicks รอบปัจจุบัน (ดึงมาดิบๆ ก่อนคัดกรองละเอียดภายหลัง)
                 DB::raw("COUNT(CASE WHEN analytics.block_id IS NOT NULL AND analytics.block_id != 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) as raw_clicks"),
                 
                 // 4. Saves รอบปัจจุบัน
@@ -409,7 +406,6 @@ class AdminDashboardController extends Controller
             ->whereBetween('analytics.created_at', [$prevStart, $end])
             ->groupBy('profiles.id', 'profiles.username')
             
-            // เรียงลำดับจากคะแนน Performance Score แบบคร่าวๆ จากฐานข้อมูลก่อนดึงมา 5 อันดับ
             ->orderByRaw("(
                 (COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) * 1) +
                 (COUNT(CASE WHEN analytics.block_id IS NOT NULL AND analytics.block_id != 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) * 5) +
@@ -419,9 +415,7 @@ class AdminDashboardController extends Controller
             ->get()
             ->map(function($page) use ($start, $end) {
                 
-
                 // ระบบค้นหา Popular Link (เจาะลึกถึงลิงก์ย่อย)
-                // 1. ดึงรายการคลิกทั้งหมดของโปรไฟล์นี้ (เพื่อเอา clicked_url มาเทียบ)
                 $allClicks = DB::table('analytics')
                     ->where('profile_id', $page->id)
                     ->whereNotNull('block_id')
@@ -429,17 +423,23 @@ class AdminDashboardController extends Controller
                     ->whereBetween('created_at', [$start, $end])
                     ->get();
 
-                // 2. ฟังก์ชันทำความสะอาด URL (เหมือนใน AnalyticsController)
+                // 🌟 7.2 [ปรับปรุงตัวทำความสะอาด URL ของเจาะลึก Top Pages ย่อย]
                 $cleanUrl = function($u) {
                     if (empty($u)) return '';
+                    
+                    $u = preg_replace('#^https?://mail\.google\.com/mail/\?view=cm&fs=1&to=#i', '', $u);
                     $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
                     $u = preg_replace('#^www\.#', '', $u);
+                    $u = preg_replace('#^mailto:#i', '', $u);
+                    $u = preg_replace('#^tel:#i', '', $u);
+                    $u = str_replace('-', '', $u);
+                    
                     return strtolower(trim($u));
                 };
 
                 $popularTitle = 'ยังไม่มีข้อมูลคลิก';
                 $popularClicks = 0;
-                $accurateClicks = 0; // 💡 สร้างตัวแปรใหม่เพื่อเก็บ "ยอดคลิกที่แท้จริง" (ตัดลิงก์ที่โดนลบออกแล้ว)
+                $accurateClicks = 0; 
 
                 if ($allClicks->count() > 0) {
                     $blocks = DB::table('blocks')->where('profile_id', $page->id)->get();
@@ -453,7 +453,7 @@ class AdminDashboardController extends Controller
                                 $url = trim($item['url'] ?? $item['link'] ?? '');
                                 if (empty($url)) continue;
 
-                                // 🎯 นับคลิกโดยเช็ค block_id และเทียบ URL ที่ทำความสะอาดแล้ว
+                                // นับคลิกโดยเช็ค block_id และเทียบ URL ที่ทำความสะอาดแล้ว
                                 $clicksCount = $allClicks->filter(function($click) use ($block, $url, $cleanUrl) {
                                     return (string)$click->block_id === (string)$block->id && 
                                            $cleanUrl($click->clicked_url) === $cleanUrl($url);
@@ -469,7 +469,6 @@ class AdminDashboardController extends Controller
                                 ]);
                             }
                         } else {
-                            // 💡 เผื่อกรณีที่เป็นลิงก์เดี่ยว ไม่ใช่ Array
                             $url = trim($block->url ?? '');
                             if (!empty($url)) {
                                 $clicksCount = $allClicks->filter(function($click) use ($block, $url, $cleanUrl) {
@@ -487,10 +486,10 @@ class AdminDashboardController extends Controller
                         }
                     }
 
-                    // 💡 คำนวณยอดคลิกรวมที่แม่นยำ (บวกเฉพาะคลิกของลิงก์ที่ยังหลงเหลืออยู่)
+                    // คำนวณยอดคลิกรวมที่แม่นยำ (บวกเฉพาะคลิกของลิงก์ที่ยังหลงเหลืออยู่)
                     $accurateClicks = $linksPerformance->sum('clicks');
 
-                    // กรอง YouTube / TikTok และบล็อกประเภท VIDEO ออก (ตามเงื่อนไขในไฟล์แยกของคุณ)
+                    // กรอง YouTube / TikTok และบล็อกประเภท VIDEO ออก
                     $filteredLinks = $linksPerformance->filter(function($link) {
                         $iconStr = strtolower($link['icon'] ?? '');
                         $typeStr = strtolower($link['type'] ?? '');
@@ -509,7 +508,7 @@ class AdminDashboardController extends Controller
 
                 // คำนวณสถิติและสร้างผลลัพธ์
                 $views = (int)$page->views;
-                $clicks = $accurateClicks; // 💡 แทนที่ยอดดิบ ($page->raw_clicks) ด้วยยอดคลิกที่คำนวณใหม่
+                $clicks = $accurateClicks; 
                 $saves = (int)$page->saves;
                 $prevViews = (int)$page->prev_views;
 
@@ -531,7 +530,7 @@ class AdminDashboardController extends Controller
                     'name' => '@' . $page->name, 
                     'link' => 'bio.link/' . $page->link,
                     'views' => $views,
-                    'clicks' => $clicks, // 💡 ยอดนี้จะแสดงผลถูกต้องตามลิงก์ที่มีอยู่จริง
+                    'clicks' => $clicks, 
                     'saves' => $saves, 
                     'ctr' => $ctr,
                     'score' => $finalScore,
@@ -542,7 +541,7 @@ class AdminDashboardController extends Controller
                     ]
                 ];
             })
-            // 💡 สั่งเรียงลำดับ Array ด้วยคะแนนที่คำนวณใหม่อีกครั้งให้แม่นยำ 100%
+            // สั่งเรียงลำดับ Array ด้วยคะแนนที่คำนวณใหม่อีกครั้งให้แม่นยำ 100%
             ->sortByDesc('score')
             ->values()
             ->toArray();
@@ -551,7 +550,6 @@ class AdminDashboardController extends Controller
     // คำนวณเปอร์เซ็นต์ 
     private function calculateTrend($curr, $prev) 
     {
-        // 8. คำนวณเปอร์เซ็นต์
         if ($prev == 0 && $curr == 0) return 0;
         if ($prev == 0) return 100;
         return round((($curr - $prev) / $prev) * 100, 1);
@@ -577,9 +575,9 @@ class AdminDashboardController extends Controller
                       ->whereColumn('profiles.user_id', 'users.id');
             }, 'total_links_count')
             
-            // 🛠️ 1. เพิ่ม Subquery เพื่อดึงเวลาแก้ไขบล็อกล่าสุด (MAX updated_at จากตาราง blocks)
+            // เพิ่ม Subquery เพื่อดึงเวลาแก้ไขบล็อกล่าสุด
             ->selectSub(function ($query) {
-                $query->selectRaw('MAX(blocks.updated_at)') // ใช้ updated_at เพื่อดูเวลาที่แก้ไขบล็อกครั้งสุดท้าย
+                $query->selectRaw('MAX(blocks.updated_at)') 
                       ->from('blocks')
                       ->join('profiles', 'profiles.id', '=', 'blocks.profile_id')
                       ->whereColumn('profiles.user_id', 'users.id');
@@ -598,30 +596,23 @@ class AdminDashboardController extends Controller
             // 1. เช็กความเคลื่อนไหวฝั่ง "การล็อกอิน (Session) หรือ วันสมัคร"
             $isLoginInactive = false;
             if ($user->last_active_ts) {
-                // ล็อกอินล่าสุดเก่ากว่า $threshold (เช่น 7 วัน) ใช่หรือไม่
                 $isLoginInactive = $user->last_active_ts < $thresholdTimestamp; 
             } else {
-                // ถ้าไม่มี Session เลย ให้ดูวันที่สมัครแทน
                 $createdAt = Carbon::parse($user->created_at);
                 $isLoginInactive = $createdAt->lessThan($thresholdDate);
             }
 
             // 2. เช็กความเคลื่อนไหวฝั่ง "การแก้ไขบล็อกล่าสุด"
-            $isBlockInactive = true; // ตั้งต้นให้ true ไว้ก่อน กรณีที่ไม่มีบล็อกเลย
+            $isBlockInactive = true; 
             if ($user->last_block_updated_at) {
                 $blockUpdatedAt = Carbon::parse($user->last_block_updated_at);
-                // แก้บล็อกล่าสุดเก่ากว่า $threshold ใช่หรือไม่
                 $isBlockInactive = $blockUpdatedAt->lessThan($thresholdDate);
             }
 
-            // บัญชีนี้จะถูกส่งไปแสดงผล (ถือว่า Inactive จริงๆ) ก็ต่อเมื่อ...
-            // "ไม่ได้ล็อกอินนานกว่ากำหนด" AND "ไม่ได้แก้บล็อกนานกว่ากำหนด" ทั้งคู่
             return $isLoginInactive && $isBlockInactive;
             
         })->map(function ($user) use ($minDays) { 
             
-            // 2. จัดการข้อมูลสำหรับคอลัมน์ "แก้ไขบล็อกล่าสุด"
-            // 2. จัดการข้อมูลสำหรับคอลัมน์ "แก้ไขบล็อกล่าสุด"
             if ($user->last_block_updated_at) {
                 $lastBlockUpdate = Carbon::parse($user->last_block_updated_at);
                 $dateDisplay = $lastBlockUpdate->translatedFormat('d M Y');
@@ -651,7 +642,6 @@ class AdminDashboardController extends Controller
                 $statusColor = 'bg-red-500';
             }
 
-            // 🛠️ เพิ่มการประกาศตัวแปรตรงนี้ ก่อน return!
             $lastActiveMoment = $user->last_active_ts 
                 ? Carbon::createFromTimestamp($user->last_active_ts) 
                 : Carbon::parse($user->created_at);
@@ -665,7 +655,6 @@ class AdminDashboardController extends Controller
                 'date' => $dateDisplay, 
                 'daysAgo' => $daysDisplay,
 
-                // ตอนนี้ระบบจะรู้จัก $lastActiveMoment แล้วครับ
                 'lastLoginDate' => $lastActiveMoment->translatedFormat('d M Y'),
                 'lastLoginDaysAgo' => (int) $lastActiveMoment->diffInDays(now()) . ' วันที่แล้ว',
                 

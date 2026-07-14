@@ -31,12 +31,15 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
 
     public function collection()
     {
+        // 🌟 1. เพิ่มการ Join ตาราง users เพื่อกรอง Admin ออกจากการจัดอันดับ Top Performers
         $data = DB::table('profiles')
+            ->join('users', 'profiles.user_id', '=', 'users.id') 
             ->leftJoin('analytics', 'profiles.id', '=', 'analytics.profile_id')
             ->select(
                 'profiles.id',
                 'profiles.username'
             )
+            ->where('users.role', '!=', 'admin') // 🎯 ตัดแอดมินออก
             ->whereBetween('analytics.created_at', [$this->prevStart, $this->end])
             ->groupBy('profiles.id', 'profiles.username')
             ->get();
@@ -69,10 +72,17 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
                 ->whereBetween('created_at', [$this->start, $this->end])
                 ->get();
 
+            // 🌟 2. อัปเดตฟังก์ชันตัวทำความสะอาด URL ให้รองรับเบอร์โทร และอีเมล
             $cleanUrl = function($u) {
                 if (empty($u)) return '';
+                
+                $u = preg_replace('#^https?://mail\.google\.com/mail/\?view=cm&fs=1&to=#i', '', $u);
                 $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
                 $u = preg_replace('#^www\.#', '', $u);
+                $u = preg_replace('#^mailto:#i', '', $u);
+                $u = preg_replace('#^tel:#i', '', $u);
+                $u = str_replace('-', '', $u);
+                
                 return strtolower(trim($u));
             };
 
@@ -103,6 +113,23 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
                                 'clicks' => $clicksCount,
                                 'url' => $url,
                                 'icon' => $item['icon'] ?? $item['iconId'] ?? $block->icon ?? 'Link',
+                                'type' => $block->type ?? ''
+                            ]);
+                        }
+                    } else {
+                        // 🌟 เผื่อกรณีที่เป็นบล็อกลิงก์เดี่ยว ไม่ใช่ Array
+                        $url = trim($block->url ?? '');
+                        if (!empty($url)) {
+                            $clicksCount = $allClicks->filter(function($click) use ($block, $url, $cleanUrl) {
+                                return (string)$click->block_id === (string)$block->id && 
+                                       $cleanUrl($click->clicked_url) === $cleanUrl($url);
+                            })->count();
+
+                            $linksPerformance->push([
+                                'title' => $block->title ?? 'ไม่มีชื่อลิงก์',
+                                'clicks' => $clicksCount,
+                                'url' => $url,
+                                'icon' => $block->icon ?? 'Link',
                                 'type' => $block->type ?? ''
                             ]);
                         }
