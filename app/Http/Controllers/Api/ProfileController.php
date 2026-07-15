@@ -56,7 +56,10 @@ class ProfileController extends Controller
     // ดึงข้อมูลสำหรับหน้าสาธารณะ (ไม่ต้อง Login)
     public function showPublic(Request $request, $username)
     {
-        $profile = Profile::with(['blocks', 'user'])->where('username', $username)->first();
+        // 🌟 แก้ไขตรงนี้: สั่งให้ relation 'blocks' ทำการเรียงลำดับตาม display_order ให้ด้วย
+        $profile = Profile::with(['blocks' => function ($query) {
+            $query->orderBy('display_order', 'asc');
+        }, 'user'])->where('username', $username)->first();
 
         if (!$profile) {
             return response()->json([
@@ -210,11 +213,9 @@ class ProfileController extends Controller
             $dataToSave = [];
             foreach ($incomingData as $key => $value) {
                 if (in_array($key, $existingColumns)) {
-                    if (in_array($key, ['avatar_url', 'cover_url', 'bg_image_url'])) {
-                        $dataToSave[$key] = $value;
-                    } elseif ($value !== null) {
-                        $dataToSave[$key] = $value;
-                    }
+                    // 🌟 ลบเงื่อนไข elseif ($value !== null) ทิ้งไปเลยครับ 
+                    // เพื่ออนุญาตให้ระบบสามารถเซฟ "ค่าว่าง" (null) ลงฐานข้อมูลทับของเก่าได้
+                    $dataToSave[$key] = $value;
                 }
             }
 
