@@ -34,39 +34,29 @@ class AuthController extends Controller
     public function register(Request $request)
     {
         // 1. การตรวจสอบข้อมูล (Validation)
-        // $validator คือตัวแปรที่เก็บผลลัพธ์จากการ Validation แล้ว 
-        // $request->all() $requestมันเก็บข้อมูลแล้ว all หมายถึงเราจะดึงข้อมูลทุกตัวที่มันเก็บมาเช็ค
         $validator = Validator::make($request->all(), [
-            // required ห้ามเป็นค่าว่าง, string ต้องเป็นข้อความ, max:100 ความยาวไม่เกิน 100 ตัวอักษร
             'display_name' => 'required|string|max:100',
-
-            // unique:users ตรวจสอบในตาราง users ต้องไม่เป็นค่าซ้ำ
             'username'     => 'required|string|max:50|unique:users',
-
-            // email: ตรวจสอบว่าเป็นรูปแบบอีเมลที่ถูกต้อง
-            'email'        => 'required|string|email|max:255|unique:users',
-
+            
+            // [แก้ไขตรงนี้] เพิ่ม ends_with:@sherwood.co.th เข้าไปที่ฟิลด์ email
+            'email'        => 'required|string|email|max:255|unique:users|ends_with:@sherwood.co.th',
+            
             'password'     => 'required|string|min:8',
+        ], [
+            // [เพิ่มตรงนี้] เพิ่ม Custom Message เพื่อส่งกลับไปแสดงผลหน้าบ้านให้ผู้ใช้เข้าใจง่าย
+            'email.ends_with' => 'อีเมลสำหรับการลงทะเบียนจะต้องใช้ @sherwood.co.th เท่านั้น'
         ]);
 
-        // Validation Fails คืนค่าเป็น Boolean 
         // ถ้า fail (ข้อมูลไม่ถูก) จะคืนค่า true จะเข้า if 
-        // ถ้า fail (ข้อมูลถูก) จะคืนค้า false แล้วข้ามไปทำงานอื่นต่อ
         if ($validator->fails()) {
-
-            // case ข้อมูลผิดจะ return ค่าเหล่านี้กลับไปให้ frontend 
             return response()->json([
                 'status' => 'error',
                 'message' => 'Validation Error',
-
-                // ดึงข้อมูลที่ผิดทั้งหมดแสดงผลในรูปของ json คืนให้frontend
                 'errors' => $validator->errors(),
             ], 422);
         }
 
         // 2. การสร้างผู้ใช้ใหม่ (Create User)
-
-        // INSERT INTO users
         $user = User::create([
             'display_name' => $request->display_name,
             'username'     => $request->username,
@@ -90,11 +80,10 @@ class AuthController extends Controller
         try {
             Mail::to($user->email)->queue(new VerifyEmailMail($temporaryVerificationUrl));
         } catch (\Exception $e) {
-            // กรณีส่งอีเมลไม่สำเร็จ สามารถเลือกลบ User ทิ้ง หรือคืนค่า error กลับไปได้
-            // ในที่นี้จะปล่อยให้สมัครผ่านไปก่อน แต่ค่อยให้กด Resend Email ทีหลังได้
+            // ปล่อยให้สมัครผ่านไปก่อน
         }
 
-        // 3. การตอบกลับ (Response)
+        // 5. การตอบกลับ (Response)
         return response()->json([
             'status' => 'success',
             'message' => 'User registered successfully',
