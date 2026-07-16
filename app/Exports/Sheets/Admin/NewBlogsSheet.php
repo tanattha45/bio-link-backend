@@ -32,13 +32,14 @@ class NewBlogsSheet implements FromCollection, WithHeadings, WithTitle, ShouldAu
             ->select('blocks.*', 'profiles.user_id as author_id', 'profiles.username')
             ->where('users.role', '!=', 'admin') // 🎯 ตัดผู้ใช้งานที่เป็น Admin ออก
             ->whereBetween('blocks.created_at', [$this->start, $this->end])
+            ->orderBy('blocks.created_at', 'asc')
             ->get();
 
         // 2. ใช้ flatMap เพื่อแตก JSON content_data ออกเป็นหลายแถว
         return $blocks->flatMap(function ($block) {
             
             // จัดฟอร์แมตวันที่ให้สวยงาม
-            $createdAt = Carbon::parse($block->created_at)->setTimezone('Asia/Bangkok')->format('Y-m-d H:i:s');
+            $createdAt = Carbon::parse($block->created_at)->setTimezone('Asia/Bangkok')->format('d/m/Y H:i:s');
             $status = $block->is_visible ? 'Visible' : 'Hidden';
             $author = $block->username;
 

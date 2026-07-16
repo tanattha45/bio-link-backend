@@ -384,167 +384,184 @@ class AdminDashboardController extends Controller
     // จัดอันดับ Top Pages
     private function getTopPagesData($start, $end, $prevStart, $prevEnd)
     {
-        return DB::table('profiles')
+        // 1. ดึงข้อมูลดิบจาก Database เฉพาะคนที่มีความเคลื่อนไหว
+        $rawData = DB::table('profiles')
             ->leftJoin('analytics', 'profiles.id', '=', 'analytics.profile_id')
             ->select(
                 'profiles.id',
                 'profiles.username as name', 
                 'profiles.username as link',
                 
-                // 1. Views รอบปัจจุบัน
+                // Views รอบปัจจุบัน และรอบก่อนหน้า
                 DB::raw("COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) as views"),
-                
-                // 2. Views รอบก่อนหน้า
                 DB::raw("COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$prevStart}' AND '{$prevEnd}' THEN 1 END) as prev_views"),
                 
-                // 3. Clicks รอบปัจจุบัน (ดึงมาดิบๆ ก่อนคัดกรองละเอียดภายหลัง)
+                // Clicks และ Saves ดิบรอบปัจจุบัน
                 DB::raw("COUNT(CASE WHEN analytics.block_id IS NOT NULL AND analytics.block_id != 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) as raw_clicks"),
-                
-                // 4. Saves รอบปัจจุบัน
                 DB::raw("COUNT(CASE WHEN analytics.block_id = 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) as saves")
             )
             ->whereBetween('analytics.created_at', [$prevStart, $end])
             ->groupBy('profiles.id', 'profiles.username')
-            
-            ->orderByRaw("(
-                (COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) * 1) +
-                (COUNT(CASE WHEN analytics.block_id IS NOT NULL AND analytics.block_id != 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) * 5) +
-                (COUNT(CASE WHEN analytics.block_id = 999999 AND analytics.created_at BETWEEN '{$start}' AND '{$end}' THEN 1 END) * 15)
-            ) DESC")
-            ->limit(5)
-            ->get()
-            ->map(function($page) use ($start, $end) {
-                
-                // ระบบค้นหา Popular Link (เจาะลึกถึงลิงก์ย่อย)
-                $allClicks = DB::table('analytics')
-                    ->where('profile_id', $page->id)
-                    ->whereNotNull('block_id')
-                    ->where('block_id', '!=', 999999)
-                    ->whereBetween('created_at', [$start, $end])
-                    ->get();
+            // กรองเอาเฉพาะคนที่มีผลงานจริงๆ อย่างน้อย 1 ครั้ง
+            ->havingRaw('views > 0 OR raw_clicks > 0 OR saves > 0')
+            ->get();
 
-                // 🌟 7.2 [ปรับปรุงตัวทำความสะอาด URL ของเจาะลึก Top Pages ย่อย]
-                $cleanUrl = function($u) {
-                    if (empty($u)) return '';
-                    
-                    $u = preg_replace('#^https?://mail\.google\.com/mail/\?view=cm&fs=1&to=#i', '', $u);
-                    $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
-                    $u = preg_replace('#^www\.#', '', $u);
-                    $u = preg_replace('#^mailto:#i', '', $u);
-                    $u = preg_replace('#^tel:#i', '', $u);
-                    $u = str_replace('-', '', $u);
-                    
-                    return strtolower(trim($u));
-                };
+        // 2. ประมวลผลลัพธ์เพื่อกรอง Clicks ที่แท้จริง และหา Popular Link
+        $processedData = $rawData->map(function($page) use ($start, $end) {
+            $allClicks = DB::table('analytics')
+                ->where('profile_id', $page->id)
+                ->whereNotNull('block_id')
+                ->where('block_id', '!=', 999999)
+                ->whereBetween('created_at', [$start, $end])
+                ->get();
 
-                $popularTitle = 'ยังไม่มีข้อมูลคลิก';
-                $popularClicks = 0;
-                $accurateClicks = 0; 
+            $cleanUrl = function($u) {
+                if (empty($u)) return '';
+                $u = preg_replace('#^https?://mail\.google\.com/mail/\?view=cm&fs=1&to=#i', '', $u);
+                $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
+                $u = preg_replace('#^www\.#', '', $u);
+                $u = preg_replace('#^mailto:#i', '', $u);
+                $u = preg_replace('#^tel:#i', '', $u);
+                $u = str_replace('-', '', $u);
+                return strtolower(trim($u));
+            };
 
-                if ($allClicks->count() > 0) {
-                    $blocks = DB::table('blocks')->where('profile_id', $page->id)->get();
-                    $linksPerformance = collect();
+            $popularTitle = 'ยังไม่มีข้อมูลคลิก';
+            $popularClicks = 0;
+            $accurateClicks = 0; 
 
-                    foreach ($blocks as $block) {
-                        $contentData = is_string($block->content_data) ? json_decode($block->content_data, true) : $block->content_data;
+            if ($allClicks->count() > 0) {
+                $blocks = DB::table('blocks')->where('profile_id', $page->id)->get();
+                $linksPerformance = collect();
 
-                        if (is_array($contentData)) {
-                            foreach ($contentData as $item) {
-                                $url = trim($item['url'] ?? $item['link'] ?? '');
-                                if (empty($url)) continue;
+                foreach ($blocks as $block) {
+                    $contentData = is_string($block->content_data) ? json_decode($block->content_data, true) : $block->content_data;
 
-                                // นับคลิกโดยเช็ค block_id และเทียบ URL ที่ทำความสะอาดแล้ว
-                                $clicksCount = $allClicks->filter(function($click) use ($block, $url, $cleanUrl) {
-                                    return (string)$click->block_id === (string)$block->id && 
-                                           $cleanUrl($click->clicked_url) === $cleanUrl($url);
-                                })->count();
+                    if (is_array($contentData)) {
+                        foreach ($contentData as $item) {
+                            $url = trim($item['url'] ?? $item['link'] ?? '');
+                            if (empty($url)) continue;
 
-                                $itemIcon = $item['iconId'] ?? $item['icon'] ?? $block->icon ?? 'Link';
+                            $clicksCount = $allClicks->filter(function($click) use ($block, $url, $cleanUrl) {
+                                return (string)$click->block_id === (string)$block->id && 
+                                       $cleanUrl($click->clicked_url) === $cleanUrl($url);
+                            })->count();
 
-                                $linksPerformance->push([
-                                    'title' => $item['name'] ?? $item['title'] ?? $block->title ?? 'ไม่มีชื่อลิงก์',
-                                    'clicks' => $clicksCount,
-                                    'icon' => $itemIcon,
-                                    'type' => $block->type ?? ''
-                                ]);
-                            }
-                        } else {
-                            $url = trim($block->url ?? '');
-                            if (!empty($url)) {
-                                $clicksCount = $allClicks->filter(function($click) use ($block, $url, $cleanUrl) {
-                                    return (string)$click->block_id === (string)$block->id && 
-                                           $cleanUrl($click->clicked_url) === $cleanUrl($url);
-                                })->count();
+                            $itemIcon = $item['iconId'] ?? $item['icon'] ?? $block->icon ?? 'Link';
 
-                                $linksPerformance->push([
-                                    'title' => $block->title ?? 'ไม่มีชื่อลิงก์',
-                                    'clicks' => $clicksCount,
-                                    'icon' => $block->icon ?? 'Link',
-                                    'type' => $block->type ?? ''
-                                ]);
-                            }
+                            $linksPerformance->push([
+                                'title' => $item['name'] ?? $item['title'] ?? $block->title ?? 'ไม่มีชื่อลิงก์',
+                                'clicks' => $clicksCount,
+                                'icon' => $itemIcon,
+                                'type' => $block->type ?? ''
+                            ]);
                         }
-                    }
+                    } else {
+                        $url = trim($block->url ?? '');
+                        if (!empty($url)) {
+                            $clicksCount = $allClicks->filter(function($click) use ($block, $url, $cleanUrl) {
+                                return (string)$click->block_id === (string)$block->id && 
+                                       $cleanUrl($click->clicked_url) === $cleanUrl($url);
+                            })->count();
 
-                    // คำนวณยอดคลิกรวมที่แม่นยำ (บวกเฉพาะคลิกของลิงก์ที่ยังหลงเหลืออยู่)
-                    $accurateClicks = $linksPerformance->sum('clicks');
-
-                    // กรอง YouTube / TikTok และบล็อกประเภท VIDEO ออก
-                    $filteredLinks = $linksPerformance->filter(function($link) {
-                        $iconStr = strtolower($link['icon'] ?? '');
-                        $typeStr = strtolower($link['type'] ?? '');
-                        return !($iconStr === 'youtube' || $iconStr === 'tiktok' || $typeStr === 'video');
-                    });
-
-                    // จัดอันดับลิงก์ที่ถูกคลิกเยอะที่สุดมา 1 อัน
-                    $topLink = $filteredLinks->sortByDesc('clicks')->first();
-                    
-                    if ($topLink && $topLink['clicks'] > 0) {
-                        $popularTitle = $topLink['title'];
-                        $popularClicks = $topLink['clicks'];
+                            $linksPerformance->push([
+                                'title' => $block->title ?? 'ไม่มีชื่อลิงก์',
+                                'clicks' => $clicksCount,
+                                'icon' => $block->icon ?? 'Link',
+                                'type' => $block->type ?? ''
+                            ]);
+                        }
                     }
                 }
 
+                $accurateClicks = $linksPerformance->sum('clicks');
 
-                // คำนวณสถิติและสร้างผลลัพธ์
-                $views = (int)$page->views;
-                $clicks = $accurateClicks; 
-                $saves = (int)$page->saves;
-                $prevViews = (int)$page->prev_views;
+                $filteredLinks = $linksPerformance->filter(function($link) {
+                    $iconStr = strtolower($link['icon'] ?? '');
+                    $typeStr = strtolower($link['type'] ?? '');
+                    return !($iconStr === 'youtube' || $iconStr === 'tiktok' || $typeStr === 'video');
+                });
 
-                // คำนวณ Growth
-                $growth = 0;
-                if ($prevViews == 0 && $views > 0) $growth = 100;
-                elseif ($prevViews > 0) $growth = round((($views - $prevViews) / $prevViews) * 100, 1);
+                $topLink = $filteredLinks->sortByDesc('clicks')->first();
+                
+                if ($topLink && $topLink['clicks'] > 0) {
+                    $popularTitle = $topLink['title'];
+                    $popularClicks = $topLink['clicks'];
+                }
+            }
 
-                // คำนวณ CTR
-                $ctr = $views > 0 ? round((($clicks+$saves) / $views) * 100, 1) : 0.0;
+            // คำนวณค่าตัวแปรพื้นฐาน
+            $views = (int)$page->views;
+            $clicks = $accurateClicks; 
+            $saves = (int)$page->saves;
+            $prevViews = (int)$page->prev_views;
 
-                // คำนวณ Performance Score ใหม่ ให้สัมพันธ์กับยอดคลิกใหม่
-                $baseScore = ($views * 1) + ($clicks * 5) + ($saves * 15);
-                $growthBonus = min($growth, 50) * 0.01; 
-                $finalScore = round($baseScore * (1 + $growthBonus), 2);
+            // คำนวณ Growth
+            $growth = 0;
+            if ($prevViews == 0 && $views > 0) $growth = 100;
+            elseif ($prevViews > 0) $growth = round((($views - $prevViews) / $prevViews) * 100, 1);
 
-                return [
-                    'id' => $page->id,
-                    'name' => '@' . $page->name, 
-                    'link' => 'bio.link/' . $page->link,
-                    'views' => $views,
-                    'clicks' => $clicks, 
-                    'saves' => $saves, 
-                    'ctr' => $ctr,
-                    'score' => $finalScore,
-                    'growth' => $growth,
-                    'popular_link' => [
-                        'title' => $popularTitle,
-                        'clicks' => $popularClicks
-                    ]
-                ];
-            })
-            // สั่งเรียงลำดับ Array ด้วยคะแนนที่คำนวณใหม่อีกครั้งให้แม่นยำ 100%
-            ->sortByDesc('score')
-            ->values()
-            ->toArray();
+            // คำนวณ CTR
+            $ctr = $views > 0 ? round((($clicks + $saves) / $views) * 100, 1) : 0.0;
+
+            return [
+                'id' => $page->id,
+                'name' => '@' . $page->name, 
+                'link' => 'bio.link/' . $page->link,
+                'views' => $views,
+                'clicks' => $clicks, 
+                'saves' => $saves, 
+                'ctr' => $ctr,
+                'growth' => $growth,
+                'popular_link' => [
+                    'title' => $popularTitle,
+                    'clicks' => $popularClicks
+                ]
+            ];
+        })->filter(function($item) {
+            // กรองเผื่อกรณี Views=0, Saves=0 และ Clicks โดนตัดจนเหลือ 0
+            return $item['views'] > 0 || $item['clicks'] > 0 || $item['saves'] > 0;
+        });
+
+        // 3. หาค่า Max ของ Views, Clicks, Saves (ดักจับการไม่มีข้อมูล)
+        $maxViews = $processedData->max('views') ?: 0;
+        $maxClicks = $processedData->max('clicks') ?: 0;
+        $maxSaves = $processedData->max('saves') ?: 0;
+
+        // 4. คำนวณ Performance Score และจัดอันดับ
+        return $processedData->map(function($item) use ($maxViews, $maxClicks, $maxSaves) {
+            
+            // คำนวณ View Score (40%) : ป้องกันหารด้วย 0
+            $viewScore = ($maxViews > 0) ? ($item['views'] / $maxViews) * 100 * 0.40 : 0;
+            
+            // คำนวณ Click Score (35%) : ป้องกันหารด้วย 0
+            $clickScore = ($maxClicks > 0) ? ($item['clicks'] / $maxClicks) * 100 * 0.35 : 0;
+            
+            // คำนวณ Save Score (20%) : ป้องกันหารด้วย 0
+            $saveScore = ($maxSaves > 0) ? ($item['saves'] / $maxSaves) * 100 * 0.20 : 0;
+            
+            // คำนวณ Growth Score (5%) : ระบบขั้นบันได
+            $growth = $item['growth'];
+            $growthScore = 0;
+            
+            if ($growth < 0) {
+                $growthScore = 0;
+            } elseif ($growth <= 10) {
+                $growthScore = 2;
+            } elseif ($growth <= 20) {
+                $growthScore = 4;
+            } else {
+                $growthScore = 5;
+            }
+
+            // คำนวณคะแนนรวม
+            $item['score'] = round($viewScore + $clickScore + $saveScore + $growthScore, 2);
+
+            return $item;
+        })
+        ->sortByDesc('score')
+        ->values()
+        ->toArray();
     }
 
     // คำนวณเปอร์เซ็นต์ 

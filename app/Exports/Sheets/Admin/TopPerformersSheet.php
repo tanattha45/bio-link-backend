@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Exports\Sheets\Admin;
 
 use Illuminate\Support\Facades\DB;
@@ -31,65 +30,53 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
 
     public function collection()
     {
-        // 🌟 1. เพิ่มการ Join ตาราง users เพื่อกรอง Admin ออกจากการจัดอันดับ Top Performers
-        $data = DB::table('profiles')
+        // 🌟 1. ดึงข้อมูลแบบรวบยอด (ลดภาระ Database) และกรองคนไม่มียอดออกตั้งแต่แรก
+        $startDateStr = $this->start->toDateTimeString();
+        $endDateStr = $this->end->toDateTimeString();
+        $prevStartDateStr = $this->prevStart->toDateTimeString();
+        $prevEndDateStr = $this->prevEnd->toDateTimeString();
+
+        $rawData = DB::table('profiles')
             ->join('users', 'profiles.user_id', '=', 'users.id') 
             ->leftJoin('analytics', 'profiles.id', '=', 'analytics.profile_id')
             ->select(
                 'profiles.id',
-                'profiles.username'
+                'profiles.username',
+                DB::raw("COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$startDateStr}' AND '{$endDateStr}' THEN 1 END) as views"),
+                DB::raw("COUNT(CASE WHEN analytics.block_id IS NULL AND analytics.created_at BETWEEN '{$prevStartDateStr}' AND '{$prevEndDateStr}' THEN 1 END) as prev_views"),
+                DB::raw("COUNT(CASE WHEN analytics.block_id IS NOT NULL AND analytics.block_id != 999999 AND analytics.created_at BETWEEN '{$startDateStr}' AND '{$endDateStr}' THEN 1 END) as raw_clicks"),
+                DB::raw("COUNT(CASE WHEN analytics.block_id = 999999 AND analytics.created_at BETWEEN '{$startDateStr}' AND '{$endDateStr}' THEN 1 END) as saves")
             )
             ->where('users.role', '!=', 'admin') // 🎯 ตัดแอดมินออก
-            ->whereBetween('analytics.created_at', [$this->prevStart, $this->end])
+            ->whereBetween('analytics.created_at', [$prevStartDateStr, $endDateStr])
             ->groupBy('profiles.id', 'profiles.username')
+            ->havingRaw('views > 0 OR raw_clicks > 0 OR saves > 0') // 🎯 ตัดคนไม่มียอดออก
             ->get();
 
-        return $data->map(function ($page) {
-            // ดึง Views
-            $views = DB::table('analytics')
-                ->where('profile_id', $page->id)
-                ->whereNull('block_id')
-                ->whereBetween('created_at', [$this->start, $this->end])
-                ->count();
-
-            $prevViews = DB::table('analytics')
-                ->where('profile_id', $page->id)
-                ->whereNull('block_id')
-                ->whereBetween('created_at', [$this->prevStart, $this->prevEnd])
-                ->count();
-
-            $saves = DB::table('analytics')
-                ->where('profile_id', $page->id)
-                ->where('block_id', 999999)
-                ->whereBetween('created_at', [$this->start, $this->end])
-                ->count();
-
-            // 🌟 ระบบค้นหา Popular Link และยอดคลิกที่แท้จริง
+        // 🌟 2. ประมวลผลลัพธ์เพื่อกรอง Clicks ที่แท้จริง และหา Popular Link
+        $processedData = $rawData->map(function ($page) use ($startDateStr, $endDateStr) {
             $allClicks = DB::table('analytics')
                 ->where('profile_id', $page->id)
                 ->whereNotNull('block_id')
                 ->where('block_id', '!=', 999999)
-                ->whereBetween('created_at', [$this->start, $this->end])
+                ->whereBetween('created_at', [$startDateStr, $endDateStr])
                 ->get();
 
-            // 🌟 2. อัปเดตฟังก์ชันตัวทำความสะอาด URL ให้รองรับเบอร์โทร และอีเมล
             $cleanUrl = function($u) {
                 if (empty($u)) return '';
-                
                 $u = preg_replace('#^https?://mail\.google\.com/mail/\?view=cm&fs=1&to=#i', '', $u);
                 $u = preg_replace('#^https?://#', '', rtrim((string)$u, '/'));
                 $u = preg_replace('#^www\.#', '', $u);
                 $u = preg_replace('#^mailto:#i', '', $u);
                 $u = preg_replace('#^tel:#i', '', $u);
                 $u = str_replace('-', '', $u);
-                
                 return strtolower(trim($u));
             };
 
             $popularTitle = 'ยังไม่มีข้อมูลคลิก';
             $popularUrl = '-';
             $popularClicks = 0;
-            $accurateClicks = 0; // ยอดคลิกที่ผ่านการกรองแล้ว
+            $accurateClicks = 0; 
 
             if ($allClicks->count() > 0) {
                 $blocks = DB::table('blocks')->where('profile_id', $page->id)->get();
@@ -117,7 +104,6 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
                             ]);
                         }
                     } else {
-                        // 🌟 เผื่อกรณีที่เป็นบล็อกลิงก์เดี่ยว ไม่ใช่ Array
                         $url = trim($block->url ?? '');
                         if (!empty($url)) {
                             $clicksCount = $allClicks->filter(function($click) use ($block, $url, $cleanUrl) {
@@ -136,10 +122,8 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
                     }
                 }
 
-                // สรุปยอดคลิกที่ถูกต้อง (ตัดลิงก์ที่ไม่มีอยู่จริงออก)
                 $accurateClicks = $linksPerformance->sum('clicks');
 
-                // กรองสำหรับ Popular Link
                 $filteredLinks = $linksPerformance->filter(function($link) {
                     $iconStr = strtolower($link['icon'] ?? '');
                     $typeStr = strtolower($link['type'] ?? '');
@@ -154,33 +138,75 @@ class TopPerformersSheet implements FromCollection, WithHeadings, WithTitle, Sho
                 }
             }
 
-            // คำนวณสถิติ
-            $ctr = $views > 0 ? round((($accurateClicks+(int)$saves) / $views) * 100, 1) : 0.0;
+            $views = (int)$page->views;
+            $saves = (int)$page->saves;
+            $prevViews = (int)$page->prev_views;
+            
+            $ctr = $views > 0 ? round((($accurateClicks + $saves) / $views) * 100, 1) : 0.0;
+            
             $growth = 0;
             if ($prevViews == 0 && $views > 0) $growth = 100;
             elseif ($prevViews > 0) $growth = round((($views - $prevViews) / $prevViews) * 100, 1);
-            
-            $baseScore = ($views * 1) + ($accurateClicks * 5) + ($saves * 15);
-            $growthBonus = min($growth, 50) * 0.01; 
-            $finalScore = round($baseScore * (1 + $growthBonus), 2);
 
             return [
-                'Profile Name'           => '@' . $page->username,
-                'Views (Current Period)' => (int)$views,
+                'username'      => $page->username,
+                'views'         => $views,
+                'clicks'        => $accurateClicks,
+                'saves'         => $saves,
+                'ctr'           => $ctr,
+                'growth'        => $growth,
+                'popularTitle'  => $popularTitle,
+                'popularUrl'    => $popularUrl,
+                'popularClicks' => $popularClicks
+            ];
+        })->filter(function($item) {
+            // กรองอีกชั้นกรณี Views=0, Saves=0 และ Clicks โดนตัดจนเหลือ 0
+            return $item['views'] > 0 || $item['clicks'] > 0 || $item['saves'] > 0;
+        });
+
+        // 🌟 3. หาค่า Max สำหรับสูตร Normalization
+        $maxViews = $processedData->max('views') ?: 0;
+        $maxClicks = $processedData->max('clicks') ?: 0;
+        $maxSaves = $processedData->max('saves') ?: 0;
+
+        // 🌟 4. คำนวณคะแนน Performance Score แบบใหม่ และจัด Format สำหรับ Excel
+        return $processedData->map(function($item) use ($maxViews, $maxClicks, $maxSaves) {
+            
+            $viewScore = ($maxViews > 0) ? ($item['views'] / $maxViews) * 100 * 0.40 : 0;
+            $clickScore = ($maxClicks > 0) ? ($item['clicks'] / $maxClicks) * 100 * 0.35 : 0;
+            $saveScore = ($maxSaves > 0) ? ($item['saves'] / $maxSaves) * 100 * 0.20 : 0;
+            
+            $growth = $item['growth'];
+            $growthScore = 0;
+            if ($growth < 0) {
+                $growthScore = 0;
+            } elseif ($growth <= 10) {
+                $growthScore = 2;
+            } elseif ($growth <= 20) {
+                $growthScore = 4;
+            } else {
+                $growthScore = 5;
+            }
+
+            $finalScore = round($viewScore + $clickScore + $saveScore + $growthScore, 2);
+
+            return [
+                'Profile Name'           => '@' . $item['username'],
+                'Views (Current Period)' => (int)$item['views'],
                 'Views Growth (%)'       => ($growth > 0 ? '+' : '') . $growth . '%',
-                'Clicks'                 => (int)$accurateClicks, // ใช้ยอดที่กรองแล้ว
-                'CTR (%)'                => $ctr . '%',
-                'Saves'                  => (int)$saves,
-                'Popular Link Title'     => $popularTitle,
-                'Popular Link URL'       => $popularUrl,
-                'Popular Link Clicks'    => (int)$popularClicks,
+                'Clicks'                 => (int)$item['clicks'],
+                'CTR (%)'                => $item['ctr'] . '%',
+                'Saves'                  => (int)$item['saves'],
+                'Popular Link Title'     => $item['popularTitle'],
+                'Popular Link URL'       => $item['popularUrl'],
+                'Popular Link Clicks'    => (int)$item['popularClicks'],
                 'Performance Score'      => $finalScore,
                 '_raw_score'             => $finalScore
             ];
         })->sortByDesc('_raw_score')->map(function($item) {
             unset($item['_raw_score']);
             return $item;
-        });
+        })->values(); // Reset index เพื่อให้แถว Excel เรียงถูกต้อง
     }
 
     public function headings(): array

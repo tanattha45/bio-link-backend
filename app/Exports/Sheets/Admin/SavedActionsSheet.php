@@ -38,11 +38,11 @@ class SavedActionsSheet implements FromCollection, WithHeadings, WithTitle, Shou
             ->where('analytics.block_id', 999999)
             // 💡 ตรวจสอบช่วงเวลาอีกครั้ง
             ->whereBetween('analytics.created_at', [$this->start->toDateTimeString(), $this->end->toDateTimeString()])
-            ->orderBy('analytics.created_at', 'desc')
+            ->orderBy('analytics.created_at', 'asc')
             ->get()
             ->map(function ($item) {
                 return [
-                    'timestamp' => Carbon::parse($item->created_at)->format('d/m/Y H:i'),
+                    'timestamp' => Carbon::parse($item->created_at)->format('d/m/Y H:i:s'),
                     'visitor'   => $item->session_id ?? 'Unknown Session',
                     'owner'     => $item->owner_username,
                     'device'    => $this->parseDevice($item->user_agent),
